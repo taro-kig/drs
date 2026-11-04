@@ -1,5 +1,5 @@
-// PP8_to_StillBase.dctl
-// Brings S-Log3 / PP8 footage closer to the look of a normalized still.
+// SLog3_Normalize.dctl
+// Normalizes S-Log3 footage (e.g. PP8) toward the look of a normalized still.
 // Working space: DaVinci Wide Gamut / DaVinci Intermediate.
 // Place right after the input CST (S-Gamut3.Cine/S-Log3 -> DWG/DI).
 //

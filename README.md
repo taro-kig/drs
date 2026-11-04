@@ -40,4 +40,4 @@ The DCTLs then show up as `drs/...` in the DCTL list (ResolveFX DCTL).
 
 | File                    | Description |
 | ----------------------- | ----------- |
-| `PP8_to_StillBase.dctl` | Brings S-Log3 / PP8 footage closer to the look of a normalized still. Assumes a DaVinci Wide Gamut / DaVinci Intermediate working space; place it right after the input CST (S-Gamut3.Cine/S-Log3 → DWG/DI). Controls: exposure, contrast, highlight compression, saturation. |
+| `SLog3_Normalize.dctl`  | Normalizes S-Log3 footage (e.g. PP8) toward the look of a normalized still. Assumes a DaVinci Wide Gamut / DaVinci Intermediate working space; place it right after the input CST (S-Gamut3.Cine/S-Log3 → DWG/DI). Controls: exposure, contrast, highlight compression, saturation. |
