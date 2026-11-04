@@ -61,9 +61,18 @@ function(drs_ofx_plugin name)
 endfunction()
 
 drs_ofx_plugin(ColorAnchors ColorAnchors/ColorAnchors.cpp)
+drs_ofx_plugin(LookExplorer LookExplorer/LookExplorer.cpp)
+target_include_directories(LookExplorer PRIVATE ColorAnchors) # shares ColorMath.h
 
 # pixel math tests (no OFX host needed)
 enable_testing()
 add_executable(test_color_math tests/test_color_math.cpp)
 target_include_directories(test_color_math PRIVATE ColorAnchors)
 add_test(NAME color_math COMMAND test_color_math)
+add_executable(test_look_math tests/test_look_math.cpp)
+target_include_directories(test_look_math PRIVATE ColorAnchors LookExplorer)
+add_test(NAME look_math COMMAND test_look_math)
+
+# writes a BMP of the 9 starting looks on a synthetic chart, for eyeballing
+add_executable(look_preview tools/look_preview.cpp)
+target_include_directories(look_preview PRIVATE ColorAnchors LookExplorer)
