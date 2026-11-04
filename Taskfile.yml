@@ -1,0 +1,95 @@
+# Task runner (https://taskfile.dev). `task` shows the list.
+# Install: Windows → `winget install Task.Task`   macOS → `brew install go-task`
+version: "3"
+
+vars:
+  # DCTL は Resolve の LUT フォルダに置く。混ざらないようにサブフォルダ（drs）にまとめる
+  LUT_ROOT:
+    sh: |
+      case "{{OS}}" in
+        windows) echo "C:/ProgramData/Blackmagic Design/DaVinci Resolve/Support/LUT" ;;
+        darwin)  echo "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT" ;;
+        *)       echo "/opt/resolve/LUT" ;;
+      esac
+  DCTL_DIR: "{{.LUT_ROOT}}/drs"
+
+tasks:
+  default:
+    desc: このリスト
+    silent: true
+    cmds:
+      - task --list
+
+  install:
+    desc: dctl/ を Resolve の LUT/drs に入れる（入れ直し。消したファイルは向こうからも消える）
+    silent: true
+    cmds:
+      - cmd: >-
+          powershell -NoProfile -Command '
+          $d = "{{.DCTL_DIR}}";
+          if (Test-Path $d) { Remove-Item -Recurse -Force $d };
+          New-Item -ItemType Directory -Force $d | Out-Null;
+          Copy-Item dctl/*.dctl $d;
+          Get-ChildItem $d | ForEach-Object { "installed: $($_.FullName)" };
+          "Resolve: 再起動するか、Project Settings > Color Management > Update Lists"'
+        platforms: [windows]
+      - cmd: |
+          sh -c '
+          d="{{.DCTL_DIR}}"
+          rm -rf "$d" && mkdir -p "$d" && cp dctl/*.dctl "$d"/ || { echo "書けない場合は sudo task install"; exit 1; }
+          for f in "$d"/*; do echo "installed: $f"; done
+          echo "Resolve: 再起動するか、Project Settings > Color Management > Update Lists"'
+        platforms: [darwin, linux]
+
+  uninstall:
+    desc: LUT/drs ごと消す
+    silent: true
+    cmds:
+      - cmd: >-
+          powershell -NoProfile -Command '$d = "{{.DCTL_DIR}}"; if (Test-Path $d) { Remove-Item -Recurse -Force $d; "removed: $d" } else { "not installed" }'
+        platforms: [windows]
+      - cmd: >-
+          sh -c 'd="{{.DCTL_DIR}}"; if [ -d "$d" ]; then rm -rf "$d" && echo "removed: $d"; else echo "not installed"; fi'
+        platforms: [darwin, linux]
+
+  status:
+    desc: 入っているものと、リポジトリとの差分
+    silent: true
+    cmds:
+      - cmd: >-
+          powershell -NoProfile -Command '
+          $d = "{{.DCTL_DIR}}";
+          if (-not (Test-Path $d)) { "not installed ($d)"; exit 0 };
+          "installed in $d";
+          $names = @(Get-ChildItem dctl/*.dctl | ForEach-Object Name) + @(Get-ChildItem $d | ForEach-Object Name) | Sort-Object -Unique;
+          foreach ($n in $names) {
+            $a = Join-Path dctl $n; $b = Join-Path $d $n;
+            if (-not (Test-Path $b)) { "  [not installed] $n" }
+            elseif (-not (Test-Path $a)) { "  [extra]         $n" }
+            elseif ((Get-FileHash $a).Hash -ne (Get-FileHash $b).Hash) { "  [outdated]      $n" }
+            else { "  [ok]            $n" }
+          }'
+        platforms: [windows]
+      - cmd: |
+          sh -c '
+          d="{{.DCTL_DIR}}"
+          [ -d "$d" ] || { echo "not installed ($d)"; exit 0; }
+          echo "installed in $d"
+          for n in $( (ls dctl; ls "$d") | sort -u ); do
+            if [ ! -e "$d/$n" ]; then echo "  [not installed] $n"
+            elif [ ! -e "dctl/$n" ]; then echo "  [extra]         $n"
+            elif ! cmp -s "dctl/$n" "$d/$n"; then echo "  [outdated]      $n"
+            else echo "  [ok]            $n"; fi
+          done'
+        platforms: [darwin, linux]
+
+  open:
+    desc: インストール先のフォルダを開く
+    silent: true
+    cmds:
+      - cmd: powershell -NoProfile -Command 'ii "{{.LUT_ROOT}}"'
+        platforms: [windows]
+      - cmd: open "{{.LUT_ROOT}}"
+        platforms: [darwin]
+      - cmd: xdg-open "{{.LUT_ROOT}}"
+        platforms: [linux]
