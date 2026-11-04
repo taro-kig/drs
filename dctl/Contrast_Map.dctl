@@ -1,0 +1,137 @@
+// Contrast_Map.dctl
+// Makes contrast visible: where the picture is flat and where it is punchy.
+// DaVinci Wide Gamut / DaVinci Intermediate working space.
+//
+// Local Contrast mode (heat map):
+//   For every pixel, how many stops the luminance varies within Radius around it
+//   (standard deviation of log2 luminance over 25 samples).
+//   blue = flat, cyan, green = moderate, yellow, red = Full Scale stops or more.
+//   Small Radius  -> texture and detail (skin, foliage, fabric).
+//   Large Radius  -> big light/shadow shapes (subject vs background separation).
+//   Radius is a percentage of the image width, so it means the same at any resolution.
+// Zones mode:
+//   Luminance posterized into bands of Zone Size stops around 18% grey.
+//   The mid grey zone is tinted green; Zone Lines draws the borders between zones.
+//   Many zones with clean borders = wide tonal range; big single zone = flat area.
+//
+// Where to put it: on the last node to judge the grade, right after the input CST
+// to judge the source. Disable it (or tick Bypass) before rendering.
+//
+// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+
+DEFINE_UI_PARAMS(mode, Mode, DCTLUI_COMBO_BOX, 0, { MODE_LOCAL, MODE_ZONES }, { Local Contrast, Zones })
+DEFINE_UI_PARAMS(radiusPct, Radius percent of width, DCTLUI_SLIDER_FLOAT, 1.0, 0.05, 10.0, 0.05)
+DEFINE_UI_PARAMS(fullScale, Full Scale stops, DCTLUI_SLIDER_FLOAT, 1.5, 0.1, 4.0, 0.05)
+DEFINE_UI_PARAMS(picture, Show Picture, DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(zoneSize, Zone Size stops, DCTLUI_SLIDER_FLOAT, 1.0, 0.25, 3.0, 0.25)
+DEFINE_UI_PARAMS(zoneLines, Zone Lines, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(bypass, Bypass, DCTLUI_CHECK_BOX, 0)
+
+// DaVinci Intermediate <-> linear
+__DEVICE__ float diToLin(float t)
+{
+    if (t <= 0.02740668f) return t / 10.44426855f;
+    return _exp2f(t / 0.07329248f - 7.0f) - 0.0075f;
+}
+
+__DEVICE__ float linToDi(float x)
+{
+    if (x <= 0.00262409f) return x * 10.44426855f;
+    return (_log2f(x + 0.0075f) + 7.0f) * 0.07329248f;
+}
+
+// DWG luminance (linear) of a pixel read from the input textures
+__DEVICE__ float lumAt(__TEXTURE__ texR, __TEXTURE__ texG, __TEXTURE__ texB, int x, int y, int w, int h)
+{
+    int cx = x < 0 ? 0 : (x > w - 1 ? w - 1 : x);
+    int cy = y < 0 ? 0 : (y > h - 1 ? h - 1 : y);
+    float r = diToLin(_tex2D(texR, cx, cy));
+    float g = diToLin(_tex2D(texG, cx, cy));
+    float b = diToLin(_tex2D(texB, cx, cy));
+    return 0.27411851f * r + 0.87363190f * g - 0.14775041f * b;
+}
+
+__DEVICE__ float stopsOf(float Y)
+{
+    return _log2f(_fmaxf(Y, 1.0e-5f) / 0.18f);
+}
+
+__DEVICE__ float3 lerp3(float3 a, float3 b, float t)
+{
+    return make_float3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+}
+
+// 0..1 -> blue, cyan, green, yellow, red (display-ish values)
+__DEVICE__ float3 heat(float t)
+{
+    float3 c0 = make_float3(0.05f, 0.10f, 0.60f);
+    float3 c1 = make_float3(0.00f, 0.55f, 0.75f);
+    float3 c2 = make_float3(0.10f, 0.70f, 0.15f);
+    float3 c3 = make_float3(0.95f, 0.85f, 0.05f);
+    float3 c4 = make_float3(0.95f, 0.08f, 0.05f);
+    float s = _fminf(_fmaxf(t, 0.0f), 1.0f) * 4.0f;
+    if (s < 1.0f) return lerp3(c0, c1, s);
+    if (s < 2.0f) return lerp3(c1, c2, s - 1.0f);
+    if (s < 3.0f) return lerp3(c2, c3, s - 2.0f);
+    return lerp3(c3, c4, _fminf(s - 3.0f, 1.0f));
+}
+
+// display-ish color (gamma 2.4, so 0.45 ~ 18% grey) -> DI
+__DEVICE__ float3 paint(float3 c)
+{
+    return make_float3(linToDi(_powf(_fmaxf(c.x, 0.0f), 2.4f)),
+                       linToDi(_powf(_fmaxf(c.y, 0.0f), 2.4f)),
+                       linToDi(_powf(_fmaxf(c.z, 0.0f), 2.4f)));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float3 src = make_float3(_tex2D(p_TexR, p_X, p_Y), _tex2D(p_TexG, p_X, p_Y), _tex2D(p_TexB, p_X, p_Y));
+    if (bypass == 1) return src;
+
+    float Y = lumAt(p_TexR, p_TexG, p_TexB, p_X, p_Y, p_Width, p_Height);
+    float ev = stopsOf(Y);
+
+    // the picture as a grey shade 0..1 (mid grey ~0.45) used to keep shapes readable
+    float shade = _fminf(_fmaxf(0.45f + ev / 12.0f, 0.0f), 1.0f);
+
+    if (mode == MODE_LOCAL) {
+        float rad = _fmaxf(radiusPct * 0.01f * (float)p_Width, 1.0f);
+        // center + 3 rings of 8 samples, each ring rotated by 15 degrees
+        float sum = ev;
+        float sum2 = ev * ev;
+        for (int ring = 1; ring <= 3; ring++) {
+            float rr = rad * (float)ring / 3.0f;
+            float rot = (float)ring * 0.2617994f;
+            for (int k = 0; k < 8; k++) {
+                float a = rot + (float)k * 0.7853982f;
+                int sx = p_X + (int)(rr * _cosf(a));
+                int sy = p_Y + (int)(rr * _sinf(a));
+                float e = stopsOf(lumAt(p_TexR, p_TexG, p_TexB, sx, sy, p_Width, p_Height));
+                sum += e;
+                sum2 += e * e;
+            }
+        }
+        float mean = sum / 25.0f;
+        float sd = _sqrtf(_fmaxf(sum2 / 25.0f - mean * mean, 0.0f));
+        float3 c = heat(sd / fullScale);
+        float m = 1.0f - picture + picture * 2.0f * shade;
+        return paint(make_float3(c.x * m, c.y * m, c.z * m));
+    }
+
+    // zones
+    int zone = (int)_floor(ev / zoneSize + 0.5f);
+    float zEv = (float)zone * zoneSize;
+    float v = _fminf(_fmaxf(0.45f + zEv / 12.0f, 0.02f), 0.98f);
+    float3 c = make_float3(v, v, v);
+    if (zone == 0) c = make_float3(0.30f, 0.55f, 0.30f);
+
+    if (zoneLines == 1) {
+        int st = p_Width / 1500;
+        if (st < 1) st = 1;
+        int zr = (int)_floor(stopsOf(lumAt(p_TexR, p_TexG, p_TexB, p_X + st, p_Y, p_Width, p_Height)) / zoneSize + 0.5f);
+        int zd = (int)_floor(stopsOf(lumAt(p_TexR, p_TexG, p_TexB, p_X, p_Y + st, p_Width, p_Height)) / zoneSize + 0.5f);
+        if (zr != zone || zd != zone) c = make_float3(0.95f, 0.30f, 0.60f);
+    }
+    return paint(c);
+}
