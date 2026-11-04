@@ -2,64 +2,122 @@
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#ff3d6e"/>
-      <stop offset="0.5" stop-color="#ff8a3d"/>
+      <stop offset="0.55" stop-color="#ff8a3d"/>
       <stop offset="1" stop-color="#ffd23d"/>
     </linearGradient>
-    <linearGradient id="flap" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#2de2ff"/>
-      <stop offset="1" stop-color="#7a5cff"/>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3de0ff"/>
+      <stop offset="1" stop-color="#6a4dff"/>
     </linearGradient>
-    <pattern id="check" width="32" height="32" patternUnits="userSpaceOnUse">
-      <rect width="32" height="32" fill="#fff"/>
-      <rect width="16" height="16" fill="#1a1a2e"/>
-      <rect x="16" y="16" width="16" height="16" fill="#1a1a2e"/>
+    <pattern id="check" width="28" height="28" patternUnits="userSpaceOnUse">
+      <rect width="28" height="28" fill="#fff"/>
+      <rect width="14" height="14" fill="#1a1a2e"/>
+      <rect x="14" y="14" width="14" height="14" fill="#1a1a2e"/>
     </pattern>
+    <clipPath id="badge">
+      <rect x="16" y="16" width="480" height="480" rx="112"/>
+    </clipPath>
+    <!-- tyre with a colour-wheel rim -->
+    <symbol id="wheel" viewBox="-60 -60 120 120" overflow="visible">
+      <circle r="54" fill="#1a1a2e"/>
+      <circle r="45" fill="none" stroke="#ff3d3d" stroke-width="6"/>
+      <g stroke="#1a1a2e" stroke-width="3">
+        <path d="M0 0 L0 -30 A30 30 0 0 1 25.98 15 Z" fill="#ff3d3d"/>
+        <path d="M0 0 L25.98 15 A30 30 0 0 1 -25.98 15 Z" fill="#3dff8a"/>
+        <path d="M0 0 L-25.98 15 A30 30 0 0 1 0 -30 Z" fill="#3d7bff"/>
+      </g>
+      <circle r="8" fill="#fff" stroke="#1a1a2e" stroke-width="3"/>
+    </symbol>
   </defs>
 
-  <!-- rounded badge -->
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)" stroke="#1a1a2e" stroke-width="14"/>
+  <!-- badge -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
 
-  <!-- speed lines -->
-  <g stroke="#fff" stroke-width="10" stroke-linecap="round" opacity="0.85">
-    <line x1="56" y1="150" x2="120" y2="150"/>
-    <line x1="40" y1="190" x2="96" y2="190"/>
-    <line x1="60" y1="230" x2="104" y2="230"/>
-  </g>
-
-  <!-- rear wing endplates -->
-  <rect x="100" y="96" width="34" height="210" rx="10" fill="#1a1a2e"/>
-  <rect x="378" y="96" width="34" height="210" rx="10" fill="#1a1a2e"/>
-  <!-- main plane -->
-  <rect x="120" y="236" width="272" height="40" rx="14" fill="#fff" stroke="#1a1a2e" stroke-width="10"/>
-  <!-- flap: OPEN (tilted up) -->
-  <g transform="rotate(-24 256 210)">
-    <rect x="146" y="168" width="220" height="34" rx="14" fill="url(#flap)" stroke="#1a1a2e" stroke-width="10"/>
-  </g>
-  <!-- airflow through the gap -->
-  <g fill="none" stroke="#1a1a2e" stroke-width="8" stroke-linecap="round">
-    <path d="M150 222 q40 -6 70 4"/>
-    <path d="M300 222 q30 -10 60 -18"/>
+  <g clip-path="url(#badge)">
+    <!-- sunburst -->
+    <g fill="#fff" opacity="0.14">
+      <path d="M256 300 L-40 120 L-40 200 Z"/>
+      <path d="M256 300 L80 -40 L180 -40 Z"/>
+      <path d="M256 300 L330 -40 L430 -40 Z"/>
+      <path d="M256 300 L560 60 L560 150 Z"/>
+    </g>
+    <!-- chequered track strip -->
+    <rect x="0" y="414" width="512" height="100" fill="url(#check)"/>
+    <rect x="0" y="406" width="512" height="10" fill="#1a1a2e"/>
   </g>
 
-  <!-- color wheels hanging under the wing -->
-  <g stroke="#1a1a2e" stroke-width="9">
-    <circle cx="176" cy="342" r="42" fill="#ff3d3d"/>
-    <circle cx="256" cy="342" r="42" fill="#3dff8a" opacity="0.95"/>
-    <circle cx="336" cy="342" r="42" fill="#3d7bff" opacity="0.95"/>
+  <!-- DRS indicator -->
+  <g transform="rotate(-8 140 92)">
+    <rect x="66" y="58" width="150" height="66" rx="16" fill="#1a1a2e"/>
+    <rect x="74" y="66" width="134" height="50" rx="10" fill="#3dff8a"/>
+    <text x="141" y="106" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-weight="900" font-size="42" fill="#1a1a2e" letter-spacing="3">DRS</text>
   </g>
-  <g fill="#fff">
-    <circle cx="176" cy="342" r="9"/>
-    <circle cx="256" cy="342" r="9"/>
-    <circle cx="336" cy="342" r="9"/>
-  </g>
-
-  <!-- DRS badge -->
-  <g transform="rotate(-6 256 432)">
-    <rect x="132" y="398" width="248" height="72" rx="36" fill="#1a1a2e"/>
-    <rect x="144" y="410" width="48" height="48" rx="24" fill="url(#check)" stroke="#fff" stroke-width="4"/>
-    <text x="290" y="449" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-weight="900" font-size="46" fill="#3dff8a" letter-spacing="4">DRS</text>
+  <!-- OPEN! sticker -->
+  <g transform="rotate(10 380 90)">
+    <rect x="318" y="66" width="124" height="46" rx="23" fill="#fff" stroke="#1a1a2e" stroke-width="6"/>
+    <text x="380" y="99" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-weight="900" font-size="26" fill="#ff3d6e">OPEN!</text>
   </g>
 
-  <!-- sparkle -->
-  <path d="M430 400 l8 22 22 8 -22 8 -8 22 -8 -22 -22 -8 22 -8z" fill="#fff" stroke="#1a1a2e" stroke-width="5"/>
+  <!-- speed lines (car heads left) -->
+  <g stroke="#fff" stroke-width="9" stroke-linecap="round">
+    <line x1="470" y1="196" x2="500" y2="196" opacity="0.8"/>
+    <line x1="462" y1="330" x2="498" y2="330" opacity="0.8"/>
+    <line x1="478" y1="372" x2="500" y2="372" opacity="0.8"/>
+  </g>
+
+  <g transform="translate(34 27) scale(0.9)">
+  <!-- ===== car (side view, nose left) ===== -->
+  <g stroke="#1a1a2e" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+    <!-- floor -->
+    <path d="M70 362 L440 362 L440 374 L70 374 Z" fill="#1a1a2e"/>
+
+    <!-- rear wing endplate -->
+    <path d="M424 204 L452 198 L456 352 L430 352 Z" fill="#1a1a2e"/>
+
+    <!-- body -->
+    <path d="M28 340
+             C 60 330, 120 318, 172 306
+             L 214 300
+             C 226 284, 240 276, 258 274
+             L 290 274
+             C 300 246, 318 236, 338 240
+             C 360 246, 392 270, 420 296
+             L 428 350
+             L 150 356
+             L 40 354 Z" fill="url(#body)"/>
+    <!-- sidepod line -->
+    <path d="M200 330 C 260 318, 330 316, 400 326" fill="none" stroke-width="5"/>
+    <!-- airbox intake -->
+    <path d="M296 272 C 302 256, 312 250, 322 250 L 322 270 Z" fill="#1a1a2e"/>
+
+    <!-- helmet -->
+    <circle cx="262" cy="270" r="20" fill="#ffd23d"/>
+    <path d="M243 262 L 268 260 L 268 272 L 246 276 Z" fill="#1a1a2e" stroke-width="3"/>
+    <!-- halo -->
+    <path d="M206 300 C 214 268, 236 252, 262 248 C 280 246, 292 254, 296 272" fill="none" stroke-width="9"/>
+
+    <!-- front wing -->
+    <path d="M18 352 L 108 348 L 112 362 L 18 366 Z" fill="#fff"/>
+    <path d="M14 326 L 30 326 L 30 368 L 14 368 Z" fill="#1a1a2e"/>
+
+    <!-- rear wing: main plane + flap OPEN -->
+    <path d="M398 236 L 470 228 L 470 248 L 398 256 Z" fill="#fff"/>
+    <g transform="rotate(-28 440 214)">
+      <path d="M400 206 L 474 206 L 474 222 L 400 222 Z" fill="#3dff8a"/>
+    </g>
+    <!-- air through the slot -->
+    <path d="M378 222 q 30 -10 64 -2" fill="none" stroke="#fff" stroke-width="5"/>
+
+    <!-- race number -->
+    <circle cx="354" cy="292" r="22" fill="#fff" stroke-width="5"/>
+  </g>
+  <text x="354" y="302" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-weight="900" font-size="26" fill="#1a1a2e">7</text>
+
+  <!-- wheels -->
+  <use href="#wheel" x="76" y="304" width="120" height="120"/>
+  <use href="#wheel" x="336" y="300" width="128" height="128"/>
+  </g>
+
+  <!-- badge outline on top -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="#1a1a2e" stroke-width="14"/>
 </svg>

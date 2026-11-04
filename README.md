@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" width="200" alt="drs logo: a rear wing with the DRS flap open, over three color wheels">
+  <img src="assets/logo.svg" width="200" alt="drs logo: an F1 car with its DRS flap open and color-wheel rims">
 </p>
 
 <h1 align="center">drs</h1>
