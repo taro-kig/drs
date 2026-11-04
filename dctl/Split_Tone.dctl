@@ -1,0 +1,117 @@
+// Split_Tone.dctl
+// Split toning: one color into the shadows, another into the highlights.
+// DaVinci Wide Gamut / DaVinci Intermediate working space.
+//
+// The tint is added in Oklab (a perceptual color space), so brightness stays the same
+// and the colors look even. Hue is an Oklab hue angle in degrees:
+//    30 = red/pink   60 = orange   90 = yellow   140 = green
+//   200 = teal      250 = blue    300 = purple   350 = magenta
+// Balance moves the split point in stops from 18% grey (+ = more of the frame counts
+// as shadows). Softness = how gradually shadows turn into highlights.
+// Show Ranges paints the frame with both colors at full strength, to see where they go.
+// Protect Black / White keeps pure black and very bright whites clean.
+//
+// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+
+DEFINE_UI_PARAMS(shHue, Shadow Hue, DCTLUI_SLIDER_FLOAT, 200.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(shAmt, Shadow Amount, DCTLUI_SLIDER_FLOAT, 0.3, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(hiHue, Highlight Hue, DCTLUI_SLIDER_FLOAT, 65.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(hiAmt, Highlight Amount, DCTLUI_SLIDER_FLOAT, 0.3, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(balance, Balance stops, DCTLUI_SLIDER_FLOAT, 0.0, -4.0, 4.0, 0.05)
+DEFINE_UI_PARAMS(softness, Softness, DCTLUI_SLIDER_FLOAT, 0.5, 0.05, 1.0, 0.01)
+DEFINE_UI_PARAMS(protect, Protect Black and White, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(showRanges, Show Ranges, DCTLUI_CHECK_BOX, 0)
+DEFINE_UI_PARAMS(mixAmt, Mix, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.01)
+
+// DaVinci Intermediate <-> linear
+__DEVICE__ float diToLin(float t)
+{
+    if (t <= 0.02740668f) return t / 10.44426855f;
+    return _exp2f(t / 0.07329248f - 7.0f) - 0.0075f;
+}
+
+__DEVICE__ float linToDi(float x)
+{
+    if (x <= 0.00262409f) return x * 10.44426855f;
+    return (_log2f(x + 0.0075f) + 7.0f) * 0.07329248f;
+}
+
+__DEVICE__ float cbrtSigned(float x)
+{
+    float a = _powf(_fabs(x), 0.33333333f);
+    return x < 0.0f ? -a : a;
+}
+
+__DEVICE__ float smooth01(float e0, float e1, float x)
+{
+    float t = _fminf(_fmaxf((x - e0) / (e1 - e0), 0.0f), 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// DWG linear -> Oklab (via XYZ D65)
+__DEVICE__ float3 dwgToOklab(float3 c)
+{
+    float X = 0.70062239f * c.x + 0.14877482f * c.y + 0.10105872f * c.z;
+    float Y = 0.27411851f * c.x + 0.87363190f * c.y - 0.14775041f * c.z;
+    float Z = -0.09896291f * c.x - 0.13789533f * c.y + 1.32591599f * c.z;
+    float l = cbrtSigned(0.8189330101f * X + 0.3618667424f * Y - 0.1288597137f * Z);
+    float m = cbrtSigned(0.0329845436f * X + 0.9293118715f * Y + 0.0361456387f * Z);
+    float s = cbrtSigned(0.0482003018f * X + 0.2643662691f * Y + 0.6338517070f * Z);
+    return make_float3(0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s,
+                       1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s,
+                       0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s);
+}
+
+// Oklab -> DWG linear
+__DEVICE__ float3 oklabToDwg(float3 o)
+{
+    float l = o.x + 0.3963377774f * o.y + 0.2158037573f * o.z;
+    float m = o.x - 0.1055613458f * o.y - 0.0638541728f * o.z;
+    float s = o.x - 0.0894841775f * o.y - 1.2914855480f * o.z;
+    l = l * l * l;
+    m = m * m * m;
+    s = s * s * s;
+    float X = 1.2270138511f * l - 0.5577999807f * m + 0.2812561490f * s;
+    float Y = -0.0405801784f * l + 1.1122568696f * m - 0.0716766787f * s;
+    float Z = -0.0763812845f * l - 0.4214819784f * m + 1.5861632204f * s;
+    return make_float3(1.51667204f * X - 0.28147805f * Y - 0.14696363f * Z,
+                       -0.46491710f * X + 1.25142378f * Y + 0.17488461f * Z,
+                       0.06484905f * X + 0.10913934f * Y + 0.76141462f * Z);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    float3 lin = make_float3(diToLin(p_R), diToLin(p_G), diToLin(p_B));
+    float3 lab = dwgToOklab(lin);
+    float L = lab.x;
+
+    // split point: Oklab L of a grey `balance` stops from 18% (neutral L = cbrt(Y))
+    float Lp = cbrtSigned(0.18f * _exp2f(balance));
+    float w = 0.25f * softness;
+    float t = smooth01(Lp - w, Lp + w, L);
+    float ws = 1.0f - t;
+    float wh = t;
+    if (protect == 1) {
+        ws *= smooth01(0.0f, 0.12f, L);
+        wh *= 1.0f - smooth01(1.3f, 1.8f, L); // about +3.5 to +5 stops over grey
+    }
+
+    const float deg = 0.01745329f;
+    const float maxC = 0.08f;
+    float sa = maxC * shAmt * _cosf(shHue * deg);
+    float sb = maxC * shAmt * _sinf(shHue * deg);
+    float ha = maxC * hiAmt * _cosf(hiHue * deg);
+    float hb = maxC * hiAmt * _sinf(hiHue * deg);
+
+    if (showRanges == 1) {
+        // both colors at full strength on a flat grey, so the split is easy to see
+        float va = 0.12f * (_cosf(shHue * deg) * ws + _cosf(hiHue * deg) * wh);
+        float vb = 0.12f * (_sinf(shHue * deg) * ws + _sinf(hiHue * deg) * wh);
+        float3 v = oklabToDwg(make_float3(0.35f + 0.4f * t, va, vb));
+        return make_float3(linToDi(v.x), linToDi(v.y), linToDi(v.z));
+    }
+
+    float3 o = oklabToDwg(make_float3(L, lab.y + sa * ws + ha * wh, lab.z + sb * ws + hb * wh));
+    float3 di = make_float3(linToDi(o.x), linToDi(o.y), linToDi(o.z));
+    return make_float3(p_R + (di.x - p_R) * mixAmt, p_G + (di.y - p_G) * mixAmt, p_B + (di.z - p_B) * mixAmt);
+}
