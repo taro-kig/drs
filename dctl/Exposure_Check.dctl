@@ -1,0 +1,87 @@
+// Exposure_Check.dctl
+// Clipping warning / false color for a DaVinci Wide Gamut / DaVinci Intermediate
+// working space. Stops are measured from 18% grey in scene-linear.
+//
+// Where to put it:
+//   - right after the input CST  -> see what the sensor clipped
+//   - on the last node            -> see what your grade does
+// Disable the node (or tick Bypass) before rendering.
+//
+// Clipping mode:
+//   red    = every channel above the highlight limit
+//   orange = at least one channel above it (e.g. a saturated sky or light)
+//   blue   = every channel below the shadow limit
+// False color mode (luminance):
+//   purple < shadow limit < blue < -4 < cyan < -2 < grey < -0.5
+//   < green (mid grey +-0.5) < grey < +2 < yellow < +4 < orange < highlight limit < red
+//
+// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+
+DEFINE_UI_PARAMS(mode, Mode, DCTLUI_COMBO_BOX, 0, { MODE_CLIP, MODE_FALSE }, { Clipping, False Color })
+DEFINE_UI_PARAMS(hiStops, Highlight Limit stops, DCTLUI_SLIDER_FLOAT, 6.5, 0.0, 12.0, 0.1)
+DEFINE_UI_PARAMS(loStops, Shadow Limit stops, DCTLUI_SLIDER_FLOAT, -6.0, -14.0, 0.0, 0.1)
+DEFINE_UI_PARAMS(stripes, Zebra Stripes, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(bypass, Bypass, DCTLUI_CHECK_BOX, 0)
+
+// DaVinci Intermediate <-> linear
+__DEVICE__ float diToLin(float t)
+{
+    if (t <= 0.02740668f) return t / 10.44426855f;
+    return _exp2f(t / 0.07329248f - 7.0f) - 0.0075f;
+}
+
+__DEVICE__ float linToDi(float x)
+{
+    if (x <= 0.00262409f) return x * 10.44426855f;
+    return (_log2f(x + 0.0075f) + 7.0f) * 0.07329248f;
+}
+
+__DEVICE__ float3 paint(float r, float g, float b)
+{
+    return make_float3(linToDi(r), linToDi(g), linToDi(b));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    float3 src = make_float3(p_R, p_G, p_B);
+    if (bypass == 1) return src;
+
+    float r = diToLin(p_R);
+    float g = diToLin(p_G);
+    float b = diToLin(p_B);
+
+    const float grey = 0.18f;
+    float hi = grey * _exp2f(hiStops);
+    float lo = grey * _exp2f(loStops);
+
+    // DaVinci Wide Gamut luminance
+    float Y = 0.27411851f * r + 0.87363190f * g - 0.14775041f * b;
+
+    // diagonal stripes: paint only every other band so the picture stays visible
+    int band = ((p_X + p_Y) / 8) % 2;
+    int show = (stripes == 0 || band == 0) ? 1 : 0;
+
+    if (mode == MODE_CLIP) {
+        float mx = _fmaxf(r, _fmaxf(g, b));
+        float mn = _fminf(r, _fminf(g, b));
+        if (show == 0) return src;
+        if (mn >= hi) return paint(1.0f, 0.02f, 0.02f);
+        if (mx >= hi) return paint(1.0f, 0.35f, 0.0f);
+        if (mx <= lo) return paint(0.02f, 0.08f, 1.0f);
+        return src;
+    }
+
+    // false color
+    float ev = _log2f(_fmaxf(Y, 1.0e-6f) / grey);
+    float yl = _fmaxf(Y, 0.0f);
+    if (ev >= hiStops) return paint(1.0f, 0.02f, 0.02f);
+    if (ev >= 4.0f)    return paint(1.0f, 0.35f, 0.0f);
+    if (ev >= 2.0f)    return paint(0.9f, 0.85f, 0.0f);
+    if (ev > 0.5f)     return paint(yl, yl, yl);
+    if (ev >= -0.5f)   return paint(0.05f, 0.35f, 0.05f);
+    if (ev >= -2.0f)   return paint(yl, yl, yl);
+    // dark zones are painted bright enough to tell apart
+    if (ev >= -4.0f)   return paint(0.0f, 0.35f, 0.45f);
+    if (ev > loStops)  return paint(0.02f, 0.08f, 0.6f);
+    return paint(0.35f, 0.0f, 0.6f);
+}

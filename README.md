@@ -40,4 +40,6 @@ The DCTLs then show up as `drs/...` in the DCTL list (ResolveFX DCTL).
 
 | File                    | Description |
 | ----------------------- | ----------- |
+| `WB_Linear.dctl`        | White balance in scene-linear (Bradford adaptation), like a raw developer. Temperature = the light to neutralize (6504 K = no change; lower = cooler), Tint + = magenta / − = green. Place it early, right after the input CST or `SLog3_Normalize`. |
+| `Exposure_Check.dctl`   | Clipping warning (red = all channels clipped, orange = one channel, blue = crushed, with optional zebra stripes) or false color by stops from 18% grey. Right after the CST it shows sensor clipping; on the last node it shows your grade. Turn it off before rendering. |
 | `SLog3_Normalize.dctl`  | Normalizes S-Log3 footage (e.g. PP8) toward the look of a normalized still. Assumes a DaVinci Wide Gamut / DaVinci Intermediate working space; place it right after the input CST (S-Gamut3.Cine/S-Log3 → DWG/DI). Controls: exposure, contrast, highlight compression, saturation. |

@@ -1,0 +1,115 @@
+// WB_Linear.dctl
+// White balance in scene-linear light with a Bradford chromatic adaptation,
+// for a DaVinci Wide Gamut / DaVinci Intermediate working space.
+// Behaves like a raw developer: highlights and saturated colors keep their hue.
+//
+// Temperature = the color of the light to neutralize (6504 K = no change).
+//   Lower it to cool the picture, raise it to warm it up.
+// Tint        = positive adds magenta, negative adds green (0 = no change).
+//
+// Place it early, right after the input CST (or after SLog3_Normalize).
+//
+// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+
+DEFINE_UI_PARAMS(temp, Temperature K, DCTLUI_SLIDER_FLOAT, 6504.0, 2000.0, 15000.0, 1.0)
+DEFINE_UI_PARAMS(tint, Tint, DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 0.1)
+
+// DaVinci Intermediate <-> linear
+__DEVICE__ float diToLin(float t)
+{
+    if (t <= 0.02740668f) return t / 10.44426855f;
+    return _exp2f(t / 0.07329248f - 7.0f) - 0.0075f;
+}
+
+__DEVICE__ float linToDi(float x)
+{
+    if (x <= 0.00262409f) return x * 10.44426855f;
+    return (_log2f(x + 0.0075f) + 7.0f) * 0.07329248f;
+}
+
+// Planckian locus, CIE 1931 xy (Kim et al. approximation, 1667 K - 25000 K)
+__DEVICE__ float2 planckXY(float T)
+{
+    float t1 = 1000.0f / T;
+    float t2 = t1 * t1;
+    float t3 = t2 * t1;
+    float x;
+    if (T <= 4000.0f) x = -0.2661239f * t3 - 0.2343589f * t2 + 0.8776956f * t1 + 0.179910f;
+    else              x = -3.0258469f * t3 + 2.1070379f * t2 + 0.2226347f * t1 + 0.240390f;
+    float x2 = x * x;
+    float x3 = x2 * x;
+    float y;
+    if (T <= 2222.0f)      y = -1.1063814f * x3 - 1.34811020f * x2 + 2.18555832f * x - 0.20219683f;
+    else if (T <= 4000.0f) y = -0.9549476f * x3 - 1.37418593f * x2 + 2.09137015f * x - 0.16748867f;
+    else                   y =  3.0817580f * x3 - 5.87338670f * x2 + 3.75112997f * x - 0.37001483f;
+    return make_float2(x, y);
+}
+
+// xy <-> CIE 1960 uv
+__DEVICE__ float2 xyToUv(float2 p)
+{
+    float d = -2.0f * p.x + 12.0f * p.y + 3.0f;
+    return make_float2(4.0f * p.x / d, 6.0f * p.y / d);
+}
+
+__DEVICE__ float2 uvToXy(float2 p)
+{
+    float d = 2.0f * p.x - 8.0f * p.y + 4.0f;
+    return make_float2(3.0f * p.x / d, 2.0f * p.y / d);
+}
+
+// white point for a temperature, pushed off the locus by duv (positive = greener)
+__DEVICE__ float3 whiteXYZ(float T, float duv)
+{
+    float2 uv = xyToUv(planckXY(T));
+    float2 a = xyToUv(planckXY(T * 0.995f));
+    float2 b = xyToUv(planckXY(T * 1.005f));
+    float tu = b.x - a.x;
+    float tv = b.y - a.y;
+    float len = _sqrtf(tu * tu + tv * tv);
+    float nu = -tv / len;
+    float nv = tu / len;
+    if (nv < 0.0f) { nu = -nu; nv = -nv; }
+    float2 xy = uvToXy(make_float2(uv.x + nu * duv, uv.y + nv * duv));
+    return make_float3(xy.x / xy.y, 1.0f, (1.0f - xy.x - xy.y) / xy.y);
+}
+
+__DEVICE__ float3 bradford(float3 c)
+{
+    return make_float3( 0.8951f * c.x + 0.2664f * c.y - 0.1614f * c.z,
+                       -0.7502f * c.x + 1.7135f * c.y + 0.0367f * c.z,
+                        0.0389f * c.x - 0.0685f * c.y + 1.0296f * c.z);
+}
+
+__DEVICE__ float3 bradfordInv(float3 c)
+{
+    return make_float3( 0.9869929f * c.x - 0.1470543f * c.y + 0.1599627f * c.z,
+                        0.4323053f * c.x + 0.5183603f * c.y + 0.0492912f * c.z,
+                       -0.0085287f * c.x + 0.0400428f * c.y + 0.9684867f * c.z);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    float r = diToLin(p_R);
+    float g = diToLin(p_G);
+    float b = diToLin(p_B);
+
+    // DWG -> XYZ
+    float3 xyz = make_float3( 0.70062239f * r + 0.14877482f * g + 0.10105872f * b,
+                              0.27411851f * r + 0.87363190f * g - 0.14775041f * b,
+                             -0.09896291f * r - 0.13789533f * g + 1.32591599f * b);
+
+    // adapt the chosen light to the reference (6504 K on the same locus, so defaults are a no-op)
+    float3 src = bradford(whiteXYZ(temp, tint * 0.0004f));
+    float3 dst = bradford(whiteXYZ(6504.0f, 0.0f));
+    float3 lms = bradford(xyz);
+    lms = make_float3(lms.x * dst.x / src.x, lms.y * dst.y / src.y, lms.z * dst.z / src.z);
+    xyz = bradfordInv(lms);
+
+    // XYZ -> DWG
+    r =  1.51667204f * xyz.x - 0.28147805f * xyz.y - 0.14696363f * xyz.z;
+    g = -0.46491710f * xyz.x + 1.25142378f * xyz.y + 0.17488461f * xyz.z;
+    b =  0.06484905f * xyz.x + 0.10913934f * xyz.y + 0.76141462f * xyz.z;
+
+    return make_float3(linToDi(r), linToDi(g), linToDi(b));
+}
