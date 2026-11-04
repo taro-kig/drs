@@ -12,6 +12,19 @@ vars:
         *)       echo "/opt/resolve/LUT" ;;
       esac
   DCTL_DIR: "{{.LUT_ROOT}}/drs"
+  # OFX プラグインの置き場所（管理者権限が要る）
+  OFX_DIR:
+    sh: |
+      case "{{OS}}" in
+        windows) echo "C:/Program Files/Common Files/OFX/Plugins" ;;
+        darwin)  echo "/Library/OFX/Plugins" ;;
+        *)       echo "/usr/OFX/Plugins" ;;
+      esac
+  # Windows は MSBuild のパス長制限（260文字）に当たりやすいので、短い %LOCALAPPDATA% の下でビルドする
+  OFX_BUILD: '{{if eq OS "windows"}}{{.LOCALAPPDATA | replace "\\" "/"}}/drs/build/ofx{{else}}build/ofx{{end}}'
+  # winget で入れた CMake は PATH に載っていないことがあるので、Windows はフルパスで呼ぶ
+  CMAKE: '{{if eq OS "windows"}}"C:/Program Files/CMake/bin/cmake.exe"{{else}}cmake{{end}}'
+  CTEST: '{{if eq OS "windows"}}"C:/Program Files/CMake/bin/ctest.exe"{{else}}ctest{{end}}'
 
 tasks:
   default:
@@ -102,6 +115,52 @@ tasks:
             elif ! cmp -s "dctl/$n" "$d/$n"; then echo "  [outdated]      $n"
             else echo "  [ok]            $n"; fi
           done'
+        platforms: [darwin, linux]
+
+  ofx:build:
+    desc: OFX プラグインをビルドしてテストする（要 CMake と C++ コンパイラ。Windows は VS 2022 Build Tools）
+    sources:
+      - ofx/**/*
+    generates:
+      - "{{.OFX_BUILD}}/bundles/**/*"
+    cmds:
+      - cmd: '{{.CMAKE}} -S ofx -B {{.OFX_BUILD}} -G "Visual Studio 17 2022" -A x64'
+        platforms: [windows]
+      - cmd: '{{.CMAKE}} -S ofx -B {{.OFX_BUILD}} -DCMAKE_BUILD_TYPE=Release'
+        platforms: [darwin, linux]
+      - '{{.CMAKE}} --build {{.OFX_BUILD}} --config Release --parallel'
+      - '{{.CTEST}} --test-dir {{.OFX_BUILD}} -C Release --output-on-failure'
+
+  ofx:install:
+    desc: OFX プラグインをビルドして Resolve の OFX フォルダに入れる（Resolve を閉じてから。管理者の確認が出る）
+    silent: true
+    deps: [ofx:build]
+    cmds:
+      - cmd: >-
+          powershell -NoProfile -Command '
+          if (Get-Process Resolve -ErrorAction SilentlyContinue) { "Resolve が起動中。閉じてからもう一度"; exit 1 };
+          $src = (Resolve-Path "{{.OFX_BUILD}}/bundles").Path;
+          $p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$((Resolve-Path scripts/ofx-install.ps1).Path)`" -Src `"$src`" -Dest `"{{.OFX_DIR}}`"";
+          if ($p.ExitCode -ne 0) { "install failed"; exit 1 };
+          Get-ChildItem "{{.OFX_DIR}}" -Directory -Filter "drs_*.ofx.bundle" | ForEach-Object { "installed: $($_.FullName)" };
+          "Resolve を起動すると Effects > OpenFX > drs に出る"'
+        platforms: [windows]
+      - cmd: |
+          sh -c '
+          sudo mkdir -p "{{.OFX_DIR}}" && sudo rm -rf "{{.OFX_DIR}}"/drs_*.ofx.bundle && sudo cp -R {{.OFX_BUILD}}/bundles/drs_*.ofx.bundle "{{.OFX_DIR}}"/ || exit 1
+          for f in "{{.OFX_DIR}}"/drs_*.ofx.bundle; do echo "installed: $f"; done'
+        platforms: [darwin, linux]
+
+  ofx:uninstall:
+    desc: drs の OFX プラグインを消す（Resolve を閉じてから）
+    silent: true
+    cmds:
+      - cmd: >-
+          powershell -NoProfile -Command '
+          $p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$((Resolve-Path scripts/ofx-install.ps1).Path)`" -Dest `"{{.OFX_DIR}}`" -Uninstall";
+          if ($p.ExitCode -eq 0) { "removed drs_*.ofx.bundle" } else { "uninstall failed"; exit 1 }'
+        platforms: [windows]
+      - cmd: sudo rm -rf "{{.OFX_DIR}}"/drs_*.ofx.bundle && echo "removed drs_*.ofx.bundle"
         platforms: [darwin, linux]
 
   open:
