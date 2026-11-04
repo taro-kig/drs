@@ -1,0 +1,109 @@
+// Film_Print.dctl
+// A small negative -> print model for a DaVinci Wide Gamut / DaVinci Intermediate
+// working space. Works per channel in stops from 18% grey, like film layers do.
+//
+// Processing order:
+//   Negative
+//     Interimage       : layers inhibit each other in log space -> film saturation
+//                        (neutrals are untouched)
+//     Dye density      : saturated colors get darker, not brighter (subtractive)
+//   Print
+//     Printer lights   : per-channel exposure in printer points (1 pt = 0.025 log E)
+//                        + makes the picture MORE of that color
+//     Characteristic   : per-channel S-curve. Different layer contrasts shift color
+//     curves             between shadows and highlights; Print Black sets how deep
+//                        the blacks go and Black Tint sets their color
+//
+// 18% grey stays at 18% grey with printer lights at 0. Output stays scene-referred,
+// so keep your usual output transform after it.
+//
+// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+
+DEFINE_UI_PARAMS(ptMaster, Printer Density pts, DCTLUI_SLIDER_FLOAT, 0.0, -50.0, 50.0, 0.5)
+DEFINE_UI_PARAMS(ptR, Printer Red pts, DCTLUI_SLIDER_FLOAT, 0.0, -25.0, 25.0, 0.5)
+DEFINE_UI_PARAMS(ptG, Printer Green pts, DCTLUI_SLIDER_FLOAT, 0.0, -25.0, 25.0, 0.5)
+DEFINE_UI_PARAMS(ptB, Printer Blue pts, DCTLUI_SLIDER_FLOAT, 0.0, -25.0, 25.0, 0.5)
+DEFINE_UI_PARAMS(interimage, Interimage, DCTLUI_SLIDER_FLOAT, 0.25, -1.0, 1.5, 0.01)
+DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 2.0, 0.01)
+DEFINE_UI_PARAMS(conR, Red Layer Contrast, DCTLUI_SLIDER_FLOAT, 0.0, -0.3, 0.3, 0.005)
+DEFINE_UI_PARAMS(conG, Green Layer Contrast, DCTLUI_SLIDER_FLOAT, 0.0, -0.3, 0.3, 0.005)
+DEFINE_UI_PARAMS(conB, Blue Layer Contrast, DCTLUI_SLIDER_FLOAT, 0.0, -0.3, 0.3, 0.005)
+DEFINE_UI_PARAMS(shoulder, Highlight Rolloff stops, DCTLUI_SLIDER_FLOAT, 5.0, 1.0, 10.0, 0.05)
+DEFINE_UI_PARAMS(floorStops, Print Black stops, DCTLUI_SLIDER_FLOAT, 7.0, 2.0, 12.0, 0.05)
+DEFINE_UI_PARAMS(tintR, Black Tint Red, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.5, 0.01)
+DEFINE_UI_PARAMS(tintG, Black Tint Green, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.5, 0.01)
+DEFINE_UI_PARAMS(tintB, Black Tint Blue, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.5, 0.01)
+DEFINE_UI_PARAMS(dyeDensity, Dye Density, DCTLUI_SLIDER_FLOAT, 0.3, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(mixAmt, Mix, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.01)
+
+// DaVinci Intermediate <-> linear
+__DEVICE__ float diToLin(float t)
+{
+    if (t <= 0.02740668f) return t / 10.44426855f;
+    return _exp2f(t / 0.07329248f - 7.0f) - 0.0075f;
+}
+
+__DEVICE__ float linToDi(float x)
+{
+    if (x <= 0.00262409f) return x * 10.44426855f;
+    return (_log2f(x + 0.0075f) + 7.0f) * 0.07329248f;
+}
+
+// tanh from exp (safe on every GPU backend; saturates cleanly to +-1)
+__DEVICE__ float tanhSafe(float z)
+{
+    return 1.0f - 2.0f / (_expf(2.0f * z) + 1.0f);
+}
+
+// S-curve in stops: slope g at grey, rolls off toward +hi and -lo
+__DEVICE__ float curve(float x, float g, float hi, float lo)
+{
+    float y = g * x;
+    if (y >= 0.0f) return hi * tanhSafe(y / hi);
+    return lo * tanhSafe(y / lo);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    const float grey = 0.18f;
+    // 1 printer point = 0.025 log10 exposure = 0.08305 stops
+    const float ptStops = 0.0830482f;
+
+    // to stops from grey
+    float xr = _log2f(_fmaxf(diToLin(p_R), 1.0e-6f) / grey);
+    float xg = _log2f(_fmaxf(diToLin(p_G), 1.0e-6f) / grey);
+    float xb = _log2f(_fmaxf(diToLin(p_B), 1.0e-6f) / grey);
+
+    // interimage (happens in the negative): push layers away from the neutral axis
+    float m = (xr + xg + xb) / 3.0f;
+    xr = xr + interimage * (xr - m);
+    xg = xg + interimage * (xg - m);
+    xb = xb + interimage * (xb - m);
+
+    // dye density: saturated colors get darker (up to -1.5 stops). Measured on the
+    //    scene colors, so a printer-light cast does not darken the whole frame
+    float spread = _fmaxf(xr, _fmaxf(xg, xb)) - _fminf(xr, _fminf(xg, xb));
+    float s = 1.0f - _exp2f(-spread);
+    float dk = 1.5f * dyeDensity * s;
+    xr -= dk; xg -= dk; xb -= dk;
+
+    // printer lights (happen when printing, i.e. after the negative)
+    xr += (ptMaster + ptR) * ptStops;
+    xg += (ptMaster + ptG) * ptStops;
+    xb += (ptMaster + ptB) * ptStops;
+
+    // per-layer characteristic curves; black tint lifts that layer's floor
+    float yr = curve(xr, contrast * (1.0f + conR), shoulder, _fmaxf(floorStops - tintR, 0.5f));
+    float yg = curve(xg, contrast * (1.0f + conG), shoulder, _fmaxf(floorStops - tintG, 0.5f));
+    float yb = curve(xb, contrast * (1.0f + conB), shoulder, _fmaxf(floorStops - tintB, 0.5f));
+
+    float r = grey * _exp2f(yr);
+    float g = grey * _exp2f(yg);
+    float b = grey * _exp2f(yb);
+
+    // mix with the untouched input (in DI)
+    float3 outc = make_float3(linToDi(r), linToDi(g), linToDi(b));
+    return make_float3(p_R + (outc.x - p_R) * mixAmt,
+                       p_G + (outc.y - p_G) * mixAmt,
+                       p_B + (outc.z - p_B) * mixAmt);
+}
