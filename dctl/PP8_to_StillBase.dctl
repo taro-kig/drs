@@ -1,49 +1,50 @@
 // PP8_to_StillBase.dctl
-// S-Log3 / PP8 の動画を、ノーマライズしたスチルの見た目に寄せるためのDCTL
-// 想定: DaVinci Wide Gamut / DaVinci Intermediate の作業空間
-// 置く場所: 入力CST(S-Gamut3.Cine/S-Log3 -> DWG/DI) の直後のノード
+// Brings S-Log3 / PP8 footage closer to the look of a normalized still.
+// Working space: DaVinci Wide Gamut / DaVinci Intermediate.
+// Place right after the input CST (S-Gamut3.Cine/S-Log3 -> DWG/DI).
+//
+// NOTE: keep this file pure ASCII. Non-ASCII text (even in comments) breaks
+// the AMD OpenCL compiler and crashes Resolve.
 
-DEFINE_UI_PARAMS(exposure, Exposure (stops), DCTLUI_SLIDER_FLOAT, 0.0, -3.0, 3.0, 0.01)
+DEFINE_UI_PARAMS(exposure, Exposure stops, DCTLUI_SLIDER_FLOAT, 0.0, -3.0, 3.0, 0.01)
 DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 0.85, 0.5, 1.5, 0.01)
 DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.336, 0.1, 0.6, 0.001)
 DEFINE_UI_PARAMS(hlKnee, Highlight Knee, DCTLUI_SLIDER_FLOAT, 0.55, 0.3, 0.9, 0.001)
 DEFINE_UI_PARAMS(hlComp, Highlight Compress, DCTLUI_SLIDER_FLOAT, 0.3, 0.0, 1.0, 0.01)
 DEFINE_UI_PARAMS(sat, Saturation, DCTLUI_SLIDER_FLOAT, 0.85, 0.0, 2.0, 0.01)
 
-// DaVinci Intermediate で 1段 あたりのコード値
-#define DI_STOP 0.07329248f
-
-// DaVinci Wide Gamut の輝度係数
-#define LR 0.274454f
-#define LG 0.873724f
-#define LB -0.148178f
-
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
+    // DaVinci Intermediate code value per stop
+    const float diStop = 0.07329248f;
+    // DaVinci Wide Gamut luminance weights
+    const float wR = 0.274454f;
+    const float wG = 0.873724f;
+    const float wB = -0.148178f;
+
     float r = p_R;
     float g = p_G;
     float b = p_B;
 
-    // 1. 露出 (ログ空間ではオフセット = リニアのゲイン)
-    float ev = exposure * DI_STOP;
+    // 1. Exposure (offset in log = gain in linear)
+    float ev = exposure * diStop;
     r += ev; g += ev; b += ev;
 
-    // 2. コントラスト (ピボット中心)
+    // 2. Contrast around the pivot
     r = (r - pivot) * contrast + pivot;
     g = (g - pivot) * contrast + pivot;
     b = (b - pivot) * contrast + pivot;
 
-    // 3. ハイライト圧縮 (輝度で計算し、RGBに同じオフセットを加えて色相を保つ)
-    float Y = r * LR + g * LG + b * LB;
-    float d = Y - hlKnee;
-    if (d > 0.0f && hlComp > 0.0f) {
-        float Yc = hlKnee + d / (1.0f + hlComp * d * 4.0f);
-        float off = Yc - Y;
-        r += off; g += off; b += off;
-        Y = Yc;
-    }
+    // 3. Highlight compression on luminance; the same offset on RGB keeps the hue
+    float Y = r * wR + g * wG + b * wB;
+    float d = _fmaxf(Y - hlKnee, 0.0f);
+    float Yc = hlKnee + d / (1.0f + hlComp * d * 4.0f);
+    float Ynew = (Y > hlKnee) ? Yc : Y;
+    float off = Ynew - Y;
+    r += off; g += off; b += off;
+    Y = Ynew;
 
-    // 4. 彩度 (輝度を保ったまま)
+    // 4. Saturation, luminance preserved
     r = Y + (r - Y) * sat;
     g = Y + (g - Y) * sat;
     b = Y + (b - Y) * sat;

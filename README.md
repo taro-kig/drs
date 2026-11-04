@@ -15,6 +15,7 @@ Uses [Task](https://taskfile.dev), pinned in `aqua.yaml`.
 
 ```sh
 task            # list tasks
+task lint       # make sure every DCTL is pure ASCII (runs before install)
 task install    # copy dctl/ into Resolve's LUT/drs (also use this to reinstall)
 task status     # show what is installed and what is outdated
 task uninstall  # remove LUT/drs
@@ -29,6 +30,9 @@ The DCTLs then show up as `drs/...` in the DCTL list (ResolveFX DCTL).
 | Windows | `C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\drs`    |
 | macOS   | `/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/drs` (use `sudo task install` if not writable) |
 | Linux   | `/opt/resolve/LUT/drs`                                                |
+
+> [!WARNING]
+> Keep DCTL files **pure ASCII**, comments included. Non-ASCII text (e.g. Japanese comments) makes the AMD OpenCL compiler fail and Resolve crashes with `Insufficient Kernel Work Group Size for globalKernel`.
 
 ## Contents
 

@@ -20,9 +20,30 @@ tasks:
     cmds:
       - task --list
 
+  lint:
+    desc: DCTL が ASCII だけか確認（日本語コメントなどがあると AMD の OpenCL で Resolve が落ちる）
+    silent: true
+    cmds:
+      - cmd: >-
+          powershell -NoProfile -Command '
+          $bad = $false;
+          foreach ($f in Get-ChildItem dctl/*.dctl) {
+            $n = 0;
+            foreach ($line in [IO.File]::ReadAllLines($f.FullName, [Text.Encoding]::UTF8)) {
+              $n++;
+              if ($line -match "[^\x00-\x7F]") { "$($f.Name):$n non-ASCII: $line"; $bad = $true }
+            }
+          };
+          if ($bad) { exit 1 } else { "lint ok" }'
+        platforms: [windows]
+      - cmd: >-
+          sh -c 'if LC_ALL=C grep -n "$(printf "[\200-\377]")" dctl/*.dctl; then echo "non-ASCII found"; exit 1; else echo "lint ok"; fi'
+        platforms: [darwin, linux]
+
   install:
     desc: dctl/ を Resolve の LUT/drs に入れる（入れ直し。消したファイルは向こうからも消える）
     silent: true
+    deps: [lint]
     cmds:
       - cmd: >-
           powershell -NoProfile -Command '
