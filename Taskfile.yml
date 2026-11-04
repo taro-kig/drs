@@ -1,5 +1,5 @@
 # Task runner (https://taskfile.dev). `task` shows the list.
-# Install: Windows → `winget install Task.Task`   macOS → `brew install go-task`
+# Install: macOS / Linux → `aqua i -l` (pinned in aqua.yaml)   Windows → `winget install Task.Task`
 version: "3"
 
 vars:

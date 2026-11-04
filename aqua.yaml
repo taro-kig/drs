@@ -1,0 +1,15 @@
+---
+# aqua - Declarative CLI Version Manager
+# https://aquaproj.github.io/
+# Install the pinned tools with:  aqua i -l   (macOS / Linux. Windows: winget install Task.Task)
+checksum:
+  enabled: true
+  require_checksum: true
+  supported_envs:
+    - darwin
+    - linux
+registries:
+  - type: standard
+    ref: v4.580.0 # renovate: depName=aquaproj/aqua-registry
+packages:
+  - name: go-task/task@v3.54.0 # task runner for Taskfile.yml (task install / status …)

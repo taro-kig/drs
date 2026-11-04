@@ -8,7 +8,10 @@
 
 ## Usage
 
-Uses [Task](https://taskfile.dev) (Windows: `winget install Task.Task` / macOS: `brew install go-task`).
+Uses [Task](https://taskfile.dev), pinned in `aqua.yaml`.
+
+- macOS / Linux: install [aqua](https://aquaproj.github.io/docs/install), then run `aqua i -l` in this repo
+- Windows: `winget install Task.Task`
 
 ```sh
 task            # list tasks
