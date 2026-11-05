@@ -114,6 +114,9 @@ struct LookParams {
     float sat;
     float shA, shB, hiA, hiB;
     float rot[3];        // radians for skin / green / blue
+    // used by Color Look only (0 in Look Explorer, which keeps it bit-identical):
+    float castA = 0.0f, castB = 0.0f; // tint centered on the mid tones, Oklab a / b
+    float tintProtect = 0.0f;         // 0..1: tints fade out on already-colorful pixels
 };
 
 inline LookParams prepare(const Look& l, float strength)
@@ -199,8 +202,10 @@ inline V3 applyLook(V3 di, const LookParams& k)
     float ws = 1.0f - smoothstep(0.15f, 0.6f, L);
     float wh = smoothstep(0.5f, 0.95f, L);
     float fadeC = smoothstep(0.0f, 0.06f, L); // no tint on pure black
-    a += (k.shA * ws + k.hiA * wh) * fadeC;
-    b += (k.shB * ws + k.hiB * wh) * fadeC;
+    if (k.tintProtect > 0.0f) fadeC *= 1.0f - k.tintProtect * smoothstep(0.04f, 0.14f, std::sqrt(a * a + b * b));
+    float wc = 1.0f - 0.75f * std::max(ws, wh); // the cast lives mostly in the mid tones
+    a += (k.shA * ws + k.hiA * wh + k.castA * wc) * fadeC;
+    b += (k.shB * ws + k.hiB * wh + k.castB * wc) * fadeC;
 
     V3 d = mul(kXyzToDwg, oklabToXyz({L, a, b}));
     float r[3] = {d.x, d.y, d.z};

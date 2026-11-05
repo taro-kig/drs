@@ -1,8 +1,9 @@
 // Color Look - OFX plugin for DaVinci Resolve
-// Pick colors, get a whole look: seven color slots (one per hue band). Each picked color
-// moves its band of the picture there, and the picked colors together set the tint of
-// highlights and shadows, richness, mood and contrast. Auto Tone sets exposure and
-// contrast from the frame. Working space: DaVinci Wide Gamut / DaVinci Intermediate.
+// Seven sliders, one per hue band: raise a color and it becomes the hero of the look. The
+// plugin reads the frame and decides the rest (where the hero tint goes, the complementary
+// color, how far to lean) without repainting wood, skin or leaves (HeroMath.h).
+// The original pick-a-color slots are still there under Manual. Auto Tone sets exposure
+// and contrast from the frame. Working space: DaVinci Wide Gamut / DaVinci Intermediate.
 // Rendering: cached 65^3 LUT, on the GPU (OpenCL) when offered, otherwise CPU.
 
 #include <cmath>
@@ -22,15 +23,16 @@
 #define kPluginName "Color Look"
 #define kPluginGrouping "drs"
 #define kPluginDescription                                                                      \
-    "Pick colors, get a whole look.\n"                                                          \
-    "Turn on a color slot and pick the color you want that part of the picture to be (Green "    \
-    "-> the green you like for leaves, Orange -> skin and warm light...). The picked colors "    \
-    "also set the highlight and shadow tint, richness, mood and contrast. Auto Tone sets "      \
-    "exposure and contrast from the frame.\n"                                                   \
+    "Raise a color and it becomes the hero of the look.\n"                                      \
+    "Orange -> teal and orange, Aqua -> a cool cyan look, Green -> a green-led film look. "     \
+    "The plugin reads the frame and decides the rest: where the hero tint goes, the "           \
+    "complementary color, how far the picture leans. Colors already in the picture (skin, "     \
+    "wood, leaves) keep their own hue. Manual: pick exact colors per band instead. "            \
+    "Auto Tone sets exposure and contrast from the frame.\n"                                    \
     "Working space: DaVinci Wide Gamut / DaVinci Intermediate."
 #define kPluginIdentifier "io.github.taro-kig.drs.ColorLook"
 #define kPluginVersionMajor 1
-#define kPluginVersionMinor 0
+#define kPluginVersionMinor 1
 
 using namespace OFX;
 
@@ -85,6 +87,7 @@ public:
         m_Dst = fetchClip(kOfxImageEffectOutputClipName);
         m_Src = fetchClip(kOfxImageEffectSimpleSourceClipName);
         for (int i = 0; i < drs::kMixColors; ++i) {
+            m_Hero[i] = fetchDoubleParam(pid("hero", i));
             m_On[i] = fetchBooleanParam(pid("on", i));
             m_Color[i] = fetchRGBParam(pid("color", i));
         }
@@ -96,7 +99,7 @@ public:
 
     void getRegionsOfInterest(const RegionsOfInterestArguments& args, RegionOfInterestSetter& rois) override
     {
-        // Auto Tone measures the whole frame
+        // Auto Tone and the hero colors measure the whole frame
         rois.setRegionOfInterest(*m_Src, m_Src->getRegionOfDefinition(args.time));
     }
 
@@ -137,6 +140,36 @@ public:
             stats = drs::statsFromHistogram(hist);
         }
 
+        // 1b. colors in the frame (only needed for hero colors)
+        float hero[drs::kMixColors];
+        bool anyHero = false;
+        for (int i = 0; i < drs::kMixColors; ++i) {
+            hero[i] = float(m_Hero[i]->getValueAtTime(t));
+            anyHero = anyHero || hero[i] > 0.0f;
+        }
+        drs::ColorStats cstats;
+        if (anyHero) {
+            std::vector<uint32_t> chist(drs::kColorBins, 0u);
+            if (gpu) {
+                if (!drs::clColorHistogram(args.pOpenCLCmdQ, src->getPixelData(), W, H, kStatStep, drs::kColorBins,
+                                           chist, &err)) {
+                    fail(err);
+                }
+            } else {
+                for (int y = b.y1; y < b.y2; y += kStatStep)
+                    for (int x = b.x1; x < b.x2; x += kStatStep) {
+                        const float* s = static_cast<const float*>(src->getPixelAddress(x, y));
+                        if (!s) continue;
+                        int bin = drs::colorBin({s[0], s[1], s[2]});
+                        if (bin >= 0) ++chist[size_t(bin)];
+                    }
+            }
+            cstats = drs::statsFromColorHist(chist);
+            // rounded like the tone stats: frame-to-frame noise neither re-bakes nor flickers
+            for (float& c : cstats.coverage) c = std::round(c * 100.0f) / 100.0f;
+            cstats.neutral = std::round(cstats.neutral * 100.0f) / 100.0f;
+        }
+
         // 2. settings -> cached LUT
         bool on[drs::kMixColors];
         drs::V3 pick[drs::kMixColors];
@@ -157,8 +190,11 @@ public:
         stats.p05 = q(stats.p05);
         stats.p95 = q(stats.p95);
         key.insert(key.end(), {amount, autoStrength, bright, contrast, stats.median, stats.p05, stats.p95});
+        for (int i = 0; i < drs::kMixColors; ++i) key.insert(key.end(), {hero[i], cstats.coverage[i]});
+        key.insert(key.end(), {cstats.neutral, cstats.valid ? 1.0 : 0.0});
 
-        drs::ColorLookSettings s = drs::makeColorLook(on, pick, amount, contrast, bright, autoStrength, stats);
+        drs::ColorLookSettings s =
+            drs::makeColorLook(hero, cstats, on, pick, amount, contrast, bright, autoStrength, stats);
         auto lut = m_Cache.get(key, 65, [s](drs::V3 c) { return drs::colorLookPixel(c, s); });
 
         // 3. apply
@@ -189,6 +225,7 @@ private:
     drs::LutCache m_Cache;
     Clip* m_Dst;
     Clip* m_Src;
+    DoubleParam* m_Hero[drs::kMixColors];
     BooleanParam* m_On[drs::kMixColors];
     RGBParam* m_Color[drs::kMixColors];
     DoubleParam* m_Amount;
@@ -253,27 +290,24 @@ void ColorLookFactory::describeInContext(ImageEffectDescriptor& desc, ContextEnu
 
     PageParamDescriptor* page = desc.definePageParam("Controls");
 
+    // hero colors: the everyday controls
     GroupParamDescriptor* colors = desc.defineGroupParam("colors");
     colors->setLabels("Colors", "Colors", "Colors");
     colors->setOpen(true);
     page->addChild(*colors);
     for (int i = 0; i < drs::kMixColors; ++i) {
         std::string name = std::string(drs::kMixNames[i]) + " " + kChips[i];
-        BooleanParamDescriptor* on = desc.defineBooleanParam(pid("on", i));
-        on->setLabels(name, name, name);
-        on->setHint("Use this color: the band moves to it, and it joins the palette that sets the look.");
-        on->setDefault(false);
-        on->setParent(*colors);
-        page->addChild(*on);
-
-        drs::V3 ref = drs::bandReferenceSrgb(i);
-        std::string clabel = std::string(drs::kMixNames[i]) + " color";
-        RGBParamDescriptor* c = desc.defineRGBParam(pid("color", i));
-        c->setLabels(clabel, clabel, clabel);
-        c->setHint("The color you want this part of the picture to be, as it looks on screen.");
-        c->setDefault(ref.x, ref.y, ref.z);
-        c->setParent(*colors);
-        page->addChild(*c);
+        DoubleParamDescriptor* h = desc.defineDoubleParam(pid("hero", i));
+        h->setLabels(name, name, name);
+        h->setHint("How much this color leads the look. The plugin decides the rest from the frame: "
+                   "where the tint goes, the complementary color, how far to lean.");
+        h->setDefault(0.0);
+        h->setRange(0.0, 1.0);
+        h->setDisplayRange(0.0, 1.0);
+        h->setIncrement(0.01);
+        h->setDoubleType(eDoubleTypePlain);
+        h->setParent(*colors);
+        page->addChild(*h);
     }
 
     GroupParamDescriptor* tone = desc.defineGroupParam("tone");
@@ -285,6 +319,30 @@ void ColorLookFactory::describeInContext(ImageEffectDescriptor& desc, ContextEnu
                  "Sets exposure and contrast from the frame to suit the colors. 0 = off.", 1.0, 0.0, 1.0);
     defineSlider(desc, page, tone, "brightness", "Brightness", "Brighter or darker, in stops.", 0.0, -2.0, 2.0);
     defineSlider(desc, page, tone, "contrast", "Contrast", "More (+) or less (-) contrast.", 0.0, -1.0, 1.0);
+
+    // manual: the original pick-a-color slots (same parameter names as Color Look 1.0)
+    GroupParamDescriptor* manual = desc.defineGroupParam("manual");
+    manual->setLabels("Manual Colors", "Manual Colors", "Manual Colors");
+    manual->setOpen(false);
+    page->addChild(*manual);
+    for (int i = 0; i < drs::kMixColors; ++i) {
+        std::string name = std::string(drs::kMixNames[i]) + " " + kChips[i];
+        BooleanParamDescriptor* on = desc.defineBooleanParam(pid("on", i));
+        on->setLabels(name, name, name);
+        on->setHint("Use this color: the band moves to it, and it joins the palette that sets the look.");
+        on->setDefault(false);
+        on->setParent(*manual);
+        page->addChild(*on);
+
+        drs::V3 ref = drs::bandReferenceSrgb(i);
+        std::string clabel = std::string(drs::kMixNames[i]) + " color";
+        RGBParamDescriptor* c = desc.defineRGBParam(pid("color", i));
+        c->setLabels(clabel, clabel, clabel);
+        c->setHint("The color you want this part of the picture to be, as it looks on screen.");
+        c->setDefault(ref.x, ref.y, ref.z);
+        c->setParent(*manual);
+        page->addChild(*c);
+    }
 }
 
 ImageEffect* ColorLookFactory::createInstance(OfxImageEffectHandle handle, ContextEnum /*context*/)

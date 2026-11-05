@@ -159,6 +159,32 @@ __kernel void lumaHist(__global const float* src, int W, int H, int step, __glob
     atomic_inc(&hist[b]);
 }
 
+// Oklab hue x chroma x lightness histogram; mirrors colorBin() in ColorLook/HeroMath.h
+__kernel void colorHist(__global const float* src, int W, int H, int step, __global uint* hist)
+{
+    int x = get_global_id(0) * step, y = get_global_id(1) * step;
+    if (x >= W || y >= H) return;
+    int i = (y * W + x) * 4;
+    float r = diToLin(src[i]), g = diToLin(src[i + 1]), b = diToLin(src[i + 2]);
+    float X = 0.70062239f * r + 0.14877482f * g + 0.10105872f * b;
+    float Y = 0.27411851f * r + 0.87363190f * g - 0.14775041f * b;
+    float Z = -0.09896291f * r - 0.13789533f * g + 1.32591599f * b;
+    float l = cbrt(0.8189330101f * X + 0.3618667424f * Y - 0.1288597137f * Z);
+    float m = cbrt(0.0329845436f * X + 0.9293118715f * Y + 0.0361456387f * Z);
+    float s = cbrt(0.0482003018f * X + 0.2643662691f * Y + 0.6338517070f * Z);
+    float L = 0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s;
+    float A = 1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s;
+    float B = 0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s;
+    if (isnan(L)) return;
+    float C = sqrt(A * A + B * B);
+    float h = atan2(B, A) * 57.29578f;
+    if (h < 0.0f) h += 360.0f;
+    int hb = clamp((int)(h / 10.0f), 0, 35);
+    int cb = clamp((int)(C / 0.03f), 0, 7);
+    int lb = clamp((int)(L * 8.0f), 0, 7);
+    atomic_inc(&hist[(hb * 8 + cb) * 8 + lb]);
+}
+
 __kernel void applyLuts(__global const float* src, __global float* dst, int W, int H,
                         __global const float* luts, int n, float lo, float scale,
                         int grid, int pick, int gap, int blk)
@@ -203,6 +229,7 @@ __kernel void applyLuts(__global const float* src, __global float* dst, int W, i
 struct Compiled {
     cl_kernel kernel = nullptr;
     cl_kernel hist = nullptr;
+    cl_kernel colorHist = nullptr;
     std::string error;
 };
 
@@ -232,6 +259,8 @@ Compiled& kernelFor(const Api& a, cl_context ctx, cl_device_id dev)
     cl_int e2 = 0;
     c.hist = a.CreateKernel(prog, "lumaHist", &e2);
     if (e2 != CL_SUCCESS) c.hist = nullptr;
+    c.colorHist = a.CreateKernel(prog, "colorHist", &e2);
+    if (e2 != CL_SUCCESS) c.colorHist = nullptr;
     return c;
 }
 
@@ -344,6 +373,50 @@ bool clLumaHistogram(void* queue, void* src, int width, int height, int step, in
     if (e == CL_SUCCESS) e = a.EnqueueReadBuffer(q, h, 1, 0, out.size() * sizeof(uint32_t), out.data(), 0, nullptr, nullptr);
     a.ReleaseMemObject(h);
     if (e != CL_SUCCESS) return fail("OpenCL histogram failed");
+    return true;
+}
+
+bool clColorHistogram(void* queue, void* src, int width, int height, int step, int bins, std::vector<uint32_t>& out,
+                      const char** err)
+{
+    static std::string s_Err;
+    auto fail = [&](const std::string& m) {
+        s_Err = m;
+        if (err) *err = s_Err.c_str();
+        return false;
+    };
+    const Api& a = api();
+    if (!a.ok) return fail("OpenCL runtime not found");
+    cl_command_queue q = static_cast<cl_command_queue>(queue);
+    cl_context ctx = nullptr;
+    cl_device_id dev = nullptr;
+    if (a.GetCommandQueueInfo(q, CL_QUEUE_CONTEXT, sizeof(ctx), &ctx, nullptr) != CL_SUCCESS ||
+        a.GetCommandQueueInfo(q, CL_QUEUE_DEVICE, sizeof(dev), &dev, nullptr) != CL_SUCCESS) {
+        return fail("clGetCommandQueueInfo failed");
+    }
+    std::lock_guard<std::mutex> lock(g_Mutex);
+    Compiled& k = kernelFor(a, ctx, dev);
+    if (!k.colorHist) return fail(k.error.empty() ? "color histogram kernel missing" : k.error);
+
+    out.assign(size_t(bins), 0u);
+    cl_int e = 0;
+    cl_mem h = a.CreateBuffer(ctx, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, out.size() * sizeof(uint32_t),
+                              out.data(), &e);
+    if (e != CL_SUCCESS) return fail("clCreateBuffer failed");
+    cl_mem s = static_cast<cl_mem>(src);
+    cl_uint i = 0;
+    e |= a.SetKernelArg(k.colorHist, i++, sizeof(cl_mem), &s);
+    e |= a.SetKernelArg(k.colorHist, i++, sizeof(int), &width);
+    e |= a.SetKernelArg(k.colorHist, i++, sizeof(int), &height);
+    e |= a.SetKernelArg(k.colorHist, i++, sizeof(int), &step);
+    e |= a.SetKernelArg(k.colorHist, i++, sizeof(cl_mem), &h);
+    const size_t local[2] = {16, 16};
+    const size_t gx = (size_t(width) + step - 1) / step, gy = (size_t(height) + step - 1) / step;
+    const size_t global[2] = {(gx + 15) / 16 * 16, (gy + 15) / 16 * 16};
+    if (e == CL_SUCCESS) e = a.EnqueueNDRangeKernel(q, k.colorHist, 2, nullptr, global, local, 0, nullptr, nullptr);
+    if (e == CL_SUCCESS) e = a.EnqueueReadBuffer(q, h, 1, 0, out.size() * sizeof(uint32_t), out.data(), 0, nullptr, nullptr);
+    a.ReleaseMemObject(h);
+    if (e != CL_SUCCESS) return fail("OpenCL color histogram failed");
     return true;
 }
 

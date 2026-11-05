@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "ColorMath.h"
+#include "HeroMath.h"
 #include "LookMath.h"
 #include "MixerMath.h"
 
@@ -231,11 +232,15 @@ struct ColorLookSettings {
     ToneMap tone;
 };
 
-// on[i] / pick[i]: the seven slots (display sRGB swatches)
-inline ColorLookSettings makeColorLook(const bool on[kMixColors], const V3 pick[kMixColors], float amount,
-                                       float contrast, float brightness, float autoStrength, const ToneStats& stats)
+// hero[i]: how much each color leads the look (0..1), decided from the frame stats `cs`.
+// on[i] / pick[i]: the seven manual slots (display sRGB swatches).
+inline ColorLookSettings makeColorLook(const float hero[kMixColors], const ColorStats& cs, const bool on[kMixColors],
+                                       const V3 pick[kMixColors], float amount, float contrast, float brightness,
+                                       float autoStrength, const ToneStats& stats)
 {
     ColorLookSettings s;
+    const HeroPlan plan = planHero(hero, cs);
+    heroMixer(plan, hero, cs, s.mixer);
     std::vector<V3> palette;
     std::vector<KeyInfo> keys;
     for (int i = 0; i < kMixColors; ++i) {
@@ -250,11 +255,22 @@ inline ColorLookSettings makeColorLook(const bool on[kMixColors], const V3 pick[
         s.mixer.sat[i] *= a;
         s.mixer.lum[i] *= a;
     }
-    Look l = finish(lookFromPalette(palette), amount, 0.0f, 0.0f);
+    Look base = lookFromPalette(palette);
+    heroLookDims(plan, base);
+    Look l = finish(base, amount, 0.0f, 0.0f);
     l.p[kContrast] += contrast;
     s.look = prepare(l, amount);
+    heroTints(plan, amount, s.look);
     s.tone = autoTone(stats, paletteMood(keys), autoStrength, brightness);
     return s;
+}
+
+// manual slots only (Color Look 1.0 behavior)
+inline ColorLookSettings makeColorLook(const bool on[kMixColors], const V3 pick[kMixColors], float amount,
+                                       float contrast, float brightness, float autoStrength, const ToneStats& stats)
+{
+    const float none[kMixColors] = {};
+    return makeColorLook(none, ColorStats{}, on, pick, amount, contrast, brightness, autoStrength, stats);
 }
 
 inline V3 colorLookPixel(V3 di, const ColorLookSettings& s)
