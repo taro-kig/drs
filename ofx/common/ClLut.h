@@ -4,6 +4,7 @@
 // dependency and still loads on machines without it.
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 namespace drs {
@@ -20,5 +21,10 @@ struct ClGrid {
 // Returns false with a message in `err` if OpenCL is unavailable or a call fails.
 bool clApplyLuts(void* queue, void* src, void* dst, int width, int height, const std::vector<const float*>& luts,
                  int n, float lo, float scale, const ClGrid& grid, const char** err);
+
+// Histogram of luminance (DWG / DI input), in stops from 18% grey over [lo, hi), sampling
+// every `step`-th pixel in x and y. Blocks until the result is back on the host.
+bool clLumaHistogram(void* queue, void* src, int width, int height, int step, int bins, float lo, float hi,
+                     std::vector<uint32_t>& out, const char** err);
 
 } // namespace drs

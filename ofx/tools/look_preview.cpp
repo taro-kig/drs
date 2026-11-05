@@ -1,11 +1,14 @@
 // look_preview: writes a BMP contact sheet of Look Explorer's 9 starting looks applied
 // to a synthetic chart (grey ramp, hue sweep, skin, sky, foliage). For eyeballing looks
-// without Resolve. Usage: look_preview out.bmp
+// without Resolve. Usage: look_preview out.bmp [colorlook]
+// colorlook: Color Look with 9 example palettes instead (Auto Tone off).
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
+#include "ColorLookMath.h"
 #include "LookMath.h"
 
 using namespace drs;
@@ -53,13 +56,44 @@ int main(int argc, char** argv)
     const int W = cw * 3 + pad * 4, H = ch * 3 + pad * 4;
     std::vector<uint8_t> img(size_t(W) * H * 3, 20);
 
+    const bool colorLook = argc > 2 && std::string(argv[2]) == "colorlook";
+    // Color Look example palettes: {slot, r, g, b} x up to 3
+    struct Pick {
+        int slot;
+        V3 c;
+    };
+    const V3 amber = {0.85f, 0.60f, 0.32f}, teal = {0.10f, 0.28f, 0.30f}, cream = {0.95f, 0.90f, 0.80f};
+    const std::vector<std::vector<Pick>> palettes = {
+        {},                                                     // 1 nothing (base curve only)
+        {{1, amber}},                                           // 2 amber only
+        {{1, amber}, {4, teal}},                                // 3 amber light + teal shadow
+        {{1, amber}, {4, teal}, {3, {0.12f, 0.32f, 0.26f}}},   // 4 + greens to deep teal-green
+        {{1, cream}},                                           // 5 pale cream: airy
+        {{1, {0.45f, 0.25f, 0.12f}}, {5, {0.08f, 0.15f, 0.25f}}}, // 6 dark brown + navy: moody
+        {{5, {0.45f, 0.65f, 0.85f}}},                           // 7 sky blue only
+        {{6, {0.85f, 0.55f, 0.70f}}, {4, {0.20f, 0.55f, 0.55f}}}, // 8 pink + aqua
+        {{1, {0.80f, 0.45f, 0.25f}}, {3, {0.55f, 0.60f, 0.25f}}, {5, {0.30f, 0.45f, 0.60f}}}, // 9 warm earthy
+    };
+
     for (int cell = 0; cell < 9; ++cell) {
         LookParams k = prepare(finish(variation({}, 0, 1, cell, 0.6f), 1, 0, 0), 1);
+        ColorLookSettings cls;
+        if (colorLook) {
+            bool on[kMixColors] = {};
+            V3 pick[kMixColors];
+            for (int i = 0; i < kMixColors; ++i) pick[i] = bandReferenceSrgb(i);
+            for (const Pick& p : palettes[cell]) {
+                on[p.slot] = true;
+                pick[p.slot] = p.c;
+            }
+            cls = makeColorLook(on, pick, 1, 0, 0, 0, ToneStats{});
+        }
         int ox = pad + (cell % 3) * (cw + pad), oy = pad + (cell / 3) * (ch + pad);
         for (int y = 0; y < ch; ++y)
             for (int x = 0; x < cw; ++x) {
                 V3 lin = scene((x + 0.5f) / cw, (y + 0.5f) / ch);
-                V3 di = applyLook({linToDi(lin.x), linToDi(lin.y), linToDi(lin.z)}, k);
+                V3 in = {linToDi(lin.x), linToDi(lin.y), linToDi(lin.z)};
+                V3 di = colorLook ? colorLookPixel(in, cls) : applyLook(in, k);
                 V3 rgb = mul(kXyzToRec709, mul(kDwgToXyz, {diToLin(di.x), diToLin(di.y), diToLin(di.z)}));
                 uint8_t* p = &img[(size_t(oy + y) * W + ox + x) * 3];
                 p[0] = toDisplay(rgb.x);

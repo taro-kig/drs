@@ -64,7 +64,8 @@ endfunction()
 
 drs_ofx_plugin(ColorAnchors ColorAnchors/ColorAnchors.cpp)
 drs_ofx_plugin(LookExplorer LookExplorer/LookExplorer.cpp)
-drs_ofx_plugin(ColorMixer ColorMixer/ColorMixer.cpp)
+drs_ofx_plugin(ColorLook ColorLook/ColorLook.cpp)
+target_include_directories(ColorLook PRIVATE LookExplorer)
 
 # pixel math tests (no OFX host needed)
 enable_testing()
@@ -77,7 +78,7 @@ add_test(NAME look_math COMMAND test_look_math)
 
 # writes a BMP of the 9 starting looks on a synthetic chart, for eyeballing
 add_executable(look_preview tools/look_preview.cpp)
-target_include_directories(look_preview PRIVATE ColorAnchors LookExplorer)
+target_include_directories(look_preview PRIVATE ColorAnchors LookExplorer ColorLook)
 
 add_executable(test_lut tests/test_lut.cpp)
 target_include_directories(test_lut PRIVATE common ColorAnchors LookExplorer)
@@ -85,10 +86,14 @@ add_test(NAME lut COMMAND test_lut)
 
 # runs the OpenCL kernel on this machine's GPU (skips without OpenCL)
 add_executable(test_cl tests/test_cl.cpp common/ClLut.cpp)
-target_include_directories(test_cl PRIVATE common ColorAnchors LookExplorer)
+target_include_directories(test_cl PRIVATE common ColorAnchors LookExplorer ColorLook)
 target_link_libraries(test_cl PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME opencl COMMAND test_cl)
 
 add_executable(test_mixer tests/test_mixer.cpp)
-target_include_directories(test_mixer PRIVATE common ColorAnchors ColorMixer)
+target_include_directories(test_mixer PRIVATE common ColorAnchors ColorLook)
 add_test(NAME mixer COMMAND test_mixer)
+
+add_executable(test_color_look tests/test_color_look.cpp)
+target_include_directories(test_color_look PRIVATE common ColorAnchors LookExplorer ColorLook)
+add_test(NAME color_look COMMAND test_color_look)

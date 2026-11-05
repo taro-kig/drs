@@ -19,6 +19,7 @@
 #endif
 
 #include "ClLut.h"
+#include "ColorLookMath.h"
 #include "ColorMath.h"
 #include "LookMath.h"
 #include "Lut3D.h"
@@ -128,6 +129,24 @@ int main()
     }
     std::printf("       GPU vs CPU LUT max diff %.6f\n", maxErr);
     check(ok && maxErr < 1e-3f, "GPU result matches the CPU LUT");
+
+    // luminance histogram (Color Look's Auto Tone) on the GPU vs the CPU
+    std::vector<uint32_t> gh, ch(kHistBins, 0u);
+    t0 = std::chrono::steady_clock::now();
+    bool hok = clLumaHistogram(q, src, W, Hh, 4, kHistBins, kHistLo, kHistHi, gh, &err);
+    ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (!hok) std::printf("       error: %s\n", err ? err : "?");
+    for (int y = 0; y < Hh; y += 4)
+        for (int x = 0; x < W; x += 4) {
+            size_t i = (size_t(y) * W + x) * 4;
+            ++ch[histBin(lumaStops({img[i], img[i + 1], img[i + 2]}))];
+        }
+    ToneStats gs = statsFromHistogram(gh), cs = statsFromHistogram(ch);
+    std::printf("       histogram %.1f ms | GPU median %.2f p05 %.2f p95 %.2f | CPU %.2f %.2f %.2f\n", ms, gs.median,
+                gs.p05, gs.p95, cs.median, cs.p05, cs.p95);
+    check(hok && std::fabs(gs.median - cs.median) < 0.2f && std::fabs(gs.p05 - cs.p05) < 0.2f &&
+              std::fabs(gs.p95 - cs.p95) < 0.2f,
+          "GPU luminance histogram matches the CPU");
 
     // contact sheet with 9 looks
     std::vector<Lut3D> looks(9);

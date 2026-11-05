@@ -1,4 +1,4 @@
-// MixerMath.h - pixel math for Color Mixer (no OFX dependency, tested alone)
+// MixerMath.h - per-band HSL moves used by Color Look (no OFX dependency, tested alone)
 //
 // A photo-style HSL mixer: Hue / Saturation / Luminance for 7 colors, picked by Oklab
 // hue so the bands follow how colors look (skin = Orange, foliage = Green).
