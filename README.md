@@ -51,6 +51,8 @@ task ofx:uninstall  # remove drs_*.ofx.bundle
 
 They show up under Effects > OpenFX > **drs**.
 
+**Speed**: each plugin bakes its color math into a 65³ 3D LUT (only when a setting changes, a few ms) and then just looks pixels up. On Windows / Linux, Resolve hands the frame to the plugin on the GPU via **OpenCL** (about 4 ms for a 24 MP still on an RX 7900 XTX); otherwise it runs the same LUT on all CPU cores. OpenCL is loaded at run time, so nothing extra needs to be installed. `ctest` includes a GPU test (`test_cl`) that compiles and runs the kernel on your card and compares it with the CPU result.
+
 | OS      | Install location                              |
 | ------- | --------------------------------------------- |
 | Windows | `C:\Program Files\Common Files\OFX\Plugins`   |

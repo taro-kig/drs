@@ -155,9 +155,12 @@ inline float hueDist(float a, float b)
 // Input and output are DWG / DI code values.
 inline V3 applyLook(V3 di, const LookParams& k)
 {
+    // log with a soft toe: log2(lin + eps) keeps 18% grey at 0 but flattens out near
+    // black instead of diving to -17 stops (which would amplify noise in dark channels)
+    const float eps = 0.0005f, g0 = 0.18f + eps;
     float lin[3] = {diToLin(di.x), diToLin(di.y), diToLin(di.z)};
     float x[3];
-    for (int c = 0; c < 3; ++c) x[c] = std::log2(std::max(lin[c], 1.0e-6f) / 0.18f) + k.off[c];
+    for (int c = 0; c < 3; ++c) x[c] = std::log2(std::max(lin[c] + eps, 1.0e-6f) / g0) + k.off[c];
 
     // interimage and dye density, both in log
     float mean = (x[0] + x[1] + x[2]) / 3.0f;
@@ -169,7 +172,7 @@ inline V3 applyLook(V3 di, const LookParams& k)
     for (int c = 0; c < 3; ++c) {
         float y = (x[c] - dk) * k.contrast;
         y = y + k.base * (tanhCurve(y, y >= 0.0f ? k.hi : 10.0f) - y);
-        o[c] = 0.18f * std::exp2(y);
+        o[c] = g0 * std::exp2(y) - eps;
     }
 
     // color work in Oklab

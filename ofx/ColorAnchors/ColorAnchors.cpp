@@ -5,12 +5,15 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "ofxsImageEffect.h"
 #include "ofxsMultiThread.h"
 #include "ofxsProcessing.h"
 
 #include "ColorMath.h"
+#include "ClLut.h"
+#include "Lut3D.h"
 
 #define kPluginName "Color Anchors"
 #define kPluginGrouping "drs"
@@ -51,6 +54,7 @@ public:
 
     void setSrcImg(Image* img) { m_Src = img; }
     void setSettings(const drs::Settings& s) { m_Settings = s; }
+    void setLut(std::shared_ptr<const drs::Lut3D> lut) { m_Lut = std::move(lut); }
 
     void multiThreadProcessImages(OfxRectI win) override
     {
@@ -63,7 +67,8 @@ public:
                     dst[0] = dst[1] = dst[2] = dst[3] = 0.0f;
                     continue;
                 }
-                drs::V3 o = drs::processPixel({src[0], src[1], src[2]}, m_Settings);
+                drs::V3 in = {src[0], src[1], src[2]};
+                drs::V3 o = m_Lut->inDomain(in) ? m_Lut->apply(in) : drs::processPixel(in, m_Settings);
                 dst[0] = o.x;
                 dst[1] = o.y;
                 dst[2] = o.z;
@@ -75,7 +80,26 @@ public:
 private:
     Image* m_Src = nullptr;
     drs::Settings m_Settings;
+    std::shared_ptr<const drs::Lut3D> m_Lut;
 };
+
+// every value that changes the result, for the LUT cache
+std::vector<double> settingsKey(const drs::Settings& s)
+{
+    std::vector<double> k;
+    for (const drs::Anchor& a : s.anchors) {
+        if (!a.on) {
+            k.push_back(0);
+            continue;
+        }
+        double v[] = {1, a.su, a.sv, a.sL, a.du, a.dv, a.lnRatio, a.invRange2, a.strength, a.matchL};
+        k.insert(k.end(), std::begin(v), std::end(v));
+    }
+    k.push_back(s.protect);
+    k.push_back(s.mix);
+    k.push_back(s.showMask ? 1 : 0);
+    return k;
+}
 
 class ColorAnchorsPlugin : public ImageEffect {
 public:
@@ -109,11 +133,28 @@ public:
             throwSuiteStatusException(kOfxStatErrValue);
         }
 
+        drs::Settings s = readSettings(args.time);
+        auto lut = m_Cache.get(settingsKey(s), 65, [&s](drs::V3 c) { return drs::processPixel(c, s); });
+
+        if (args.isEnabledOpenCLRender) {
+            // GPU: the images are cl_mem buffers on the host's queue
+            const OfxRectI b = dst->getBounds();
+            const char* err = nullptr;
+            if (!drs::clApplyLuts(args.pOpenCLCmdQ, src->getPixelData(), dst->getPixelData(), b.x2 - b.x1,
+                                  b.y2 - b.y1, {lut->data().data()}, lut->size(), drs::Lut3D::kLo, lut->scale(),
+                                  drs::ClGrid{}, &err)) {
+                sendMessage(Message::eMessageError, "", std::string("Color Anchors GPU: ") + (err ? err : "?"));
+                throwSuiteStatusException(kOfxStatFailed);
+            }
+            return;
+        }
+
         AnchorProcessor proc(*this);
         proc.setDstImg(dst.get());
         proc.setSrcImg(src.get());
         proc.setRenderWindow(args.renderWindow);
-        proc.setSettings(readSettings(args.time));
+        proc.setSettings(s);
+        proc.setLut(lut);
         proc.process();
     }
 
@@ -151,6 +192,7 @@ private:
         return s;
     }
 
+    drs::LutCache m_Cache;
     Clip* m_Dst;
     Clip* m_Src;
     BooleanParam* m_Enable[drs::kMaxAnchors];
@@ -203,6 +245,9 @@ void ColorAnchorsFactory::describe(ImageEffectDescriptor& desc)
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setRenderThreadSafety(eRenderFullySafe);
+#ifndef __APPLE__
+    desc.setSupportsOpenCLBuffersRender(true); // DaVinci Resolve on Windows / Linux
+#endif
 }
 
 void ColorAnchorsFactory::describeInContext(ImageEffectDescriptor& desc, ContextEnum /*context*/)

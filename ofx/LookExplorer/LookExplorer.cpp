@@ -8,12 +8,15 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "ofxsImageEffect.h"
 #include "ofxsMultiThread.h"
 #include "ofxsProcessing.h"
 
+#include "ClLut.h"
 #include "LookMath.h"
+#include "Lut3D.h"
 
 #define kPluginName "Look Explorer"
 #define kPluginGrouping "drs"
@@ -53,7 +56,10 @@ public:
     Image* src = nullptr;
     bool grid = true;
     int pick = 4;
-    drs::LookParams looks[9];
+    drs::LookParams looks[9];                  // exact model, for pixels outside the LUT range
+    std::shared_ptr<const drs::Lut3D> luts[9]; // baked looks (index 0 in Result view)
+
+    drs::V3 look(int i, drs::V3 c) const { return luts[i]->inDomain(c) ? luts[i]->apply(c) : drs::applyLook(c, looks[i]); }
 
     void multiThreadProcessImages(OfxRectI win) override
     {
@@ -70,7 +76,7 @@ public:
                 float alpha = s ? s[3] : 1.0f;
                 drs::V3 o;
                 if (!grid) {
-                    o = s ? drs::applyLook({s[0], s[1], s[2]}, looks[0]) : drs::V3{0, 0, 0};
+                    o = s ? look(0, {s[0], s[1], s[2]}) : drs::V3{0, 0, 0};
                 } else {
                     o = gridPixel(x, y, b, W, H, gap, blk);
                     alpha = 1.0f;
@@ -125,7 +131,7 @@ private:
                 acc.y += v.y;
                 acc.z += v.z;
             }
-        return drs::applyLook({acc.x / 9.0f, acc.y / 9.0f, acc.z / 9.0f}, looks[cell]);
+        return look(cell, {acc.x / 9.0f, acc.y / 9.0f, acc.z / 9.0f});
     }
 };
 
@@ -187,14 +193,38 @@ public:
         proc.src = src.get();
         proc.grid = view == kViewExplore;
         proc.pick = pick;
-        if (proc.grid) {
-            for (int c = 0; c < 9; ++c) {
-                drs::Look l = drs::finish(drs::variation(center, round, seed, c, variety), amount, warmth, punch);
-                proc.looks[c] = drs::prepare(l, amount);
+        // 65^3 LUT per look (about 6 ms to bake each, only when a setting changes)
+        const int cells = proc.grid ? 9 : 1;
+        const int n = 65;
+        for (int c = 0; c < cells; ++c) {
+            drs::Look l = drs::finish(drs::variation(center, round, seed, proc.grid ? c : pick, variety), amount,
+                                      warmth, punch);
+            drs::LookParams k = drs::prepare(l, amount);
+            std::vector<double> key(l.p, l.p + drs::kDims);
+            key.push_back(amount);
+            proc.looks[c] = k;
+            proc.luts[c] = (proc.grid ? m_GridCache[c] : m_ResultCache).get(key, n, [k](drs::V3 v) {
+                return drs::applyLook(v, k);
+            });
+        }
+
+        if (args.isEnabledOpenCLRender) {
+            const OfxRectI b = dst->getBounds();
+            const int W = b.x2 - b.x1, H = b.y2 - b.y1;
+            std::vector<const float*> ptrs;
+            for (int c = 0; c < cells; ++c) ptrs.push_back(proc.luts[c]->data().data());
+            drs::ClGrid grid;
+            grid.on = proc.grid;
+            grid.pick = pick;
+            grid.gap = std::max(2, W / 500);
+            grid.blk = std::max(2, H / 100);
+            const char* err = nullptr;
+            if (!drs::clApplyLuts(args.pOpenCLCmdQ, src->getPixelData(), dst->getPixelData(), W, H, ptrs, n,
+                                  drs::Lut3D::kLo, proc.luts[0]->scale(), grid, &err)) {
+                sendMessage(Message::eMessageError, "", std::string("Look Explorer GPU: ") + (err ? err : "?"));
+                throwSuiteStatusException(kOfxStatFailed);
             }
-        } else {
-            drs::Look l = drs::finish(drs::variation(center, round, seed, pick, variety), amount, warmth, punch);
-            proc.looks[0] = drs::prepare(l, amount);
+            return;
         }
         proc.process();
     }
@@ -258,6 +288,8 @@ private:
         m_PSeed->setValue(seed);
     }
 
+    drs::LutCache m_GridCache[9];
+    drs::LutCache m_ResultCache;
     Clip* m_Dst;
     Clip* m_Src;
     ChoiceParam* m_View;
@@ -336,6 +368,9 @@ void LookExplorerFactory::describe(ImageEffectDescriptor& desc)
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setRenderThreadSafety(eRenderFullySafe);
+#ifndef __APPLE__
+    desc.setSupportsOpenCLBuffersRender(true); // DaVinci Resolve on Windows / Linux
+#endif
 }
 
 void LookExplorerFactory::describeInContext(ImageEffectDescriptor& desc, ContextEnum /*context*/)

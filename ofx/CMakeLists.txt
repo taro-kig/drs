@@ -45,8 +45,10 @@ set(BUNDLE_DIR ${CMAKE_BINARY_DIR}/bundles)
 
 # one OFX bundle per plugin: <name>.ofx.bundle/Contents/<arch>/<name>.ofx
 function(drs_ofx_plugin name)
-  add_library(${name} MODULE ${ARGN})
-  target_link_libraries(${name} PRIVATE ofxsupport)
+  add_library(${name} MODULE ${ARGN} ${CMAKE_CURRENT_SOURCE_DIR}/common/ClLut.cpp)
+  target_link_libraries(${name} PRIVATE ofxsupport ${CMAKE_DL_LIBS})
+  # common/ = LUT + OpenCL helpers, ColorAnchors/ = ColorMath.h
+  target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/common ${CMAKE_CURRENT_SOURCE_DIR}/ColorAnchors)
   set_target_properties(${name} PROPERTIES PREFIX "" SUFFIX ".ofx" OUTPUT_NAME drs_${name})
   if(MSVC)
     target_compile_options(${name} PRIVATE /W4 /fp:fast)
@@ -62,7 +64,6 @@ endfunction()
 
 drs_ofx_plugin(ColorAnchors ColorAnchors/ColorAnchors.cpp)
 drs_ofx_plugin(LookExplorer LookExplorer/LookExplorer.cpp)
-target_include_directories(LookExplorer PRIVATE ColorAnchors) # shares ColorMath.h
 
 # pixel math tests (no OFX host needed)
 enable_testing()
@@ -76,3 +77,13 @@ add_test(NAME look_math COMMAND test_look_math)
 # writes a BMP of the 9 starting looks on a synthetic chart, for eyeballing
 add_executable(look_preview tools/look_preview.cpp)
 target_include_directories(look_preview PRIVATE ColorAnchors LookExplorer)
+
+add_executable(test_lut tests/test_lut.cpp)
+target_include_directories(test_lut PRIVATE common ColorAnchors LookExplorer)
+add_test(NAME lut COMMAND test_lut)
+
+# runs the OpenCL kernel on this machine's GPU (skips without OpenCL)
+add_executable(test_cl tests/test_cl.cpp common/ClLut.cpp)
+target_include_directories(test_cl PRIVATE common ColorAnchors LookExplorer)
+target_link_libraries(test_cl PRIVATE ${CMAKE_DL_LIBS})
+add_test(NAME opencl COMMAND test_cl)
