@@ -8,8 +8,9 @@
 //   - the less of the hero color the frame already has, the more the picture leans to it;
 //     the more complement-colored the frame is (sky, foliage...), the more of the
 //     complement it gets
-//   - the hero band itself gets cleaner and richer, but no hue moves: wood, skin and leaves
-//     keep their own colors, and the tints fade out on pixels that are already colorful
+//   - the hero band itself gets cleaner and richer, but no hue moves: on pixels that are
+//     already colorful the tints only push along the pixel's own hue (richer or a little
+//     quieter), so wood, skin and leaves keep their own colors
 // Working space: DaVinci Wide Gamut / DaVinci Intermediate.
 #pragma once
 
@@ -119,6 +120,7 @@ struct HeroPlan {
     float complement = 0;    // Oklab hue of its partner
     float heroHigh = 0.5f;   // 1 = hero in the highlights, 0 = in the shadows
     float castAmt = 0, compAmt = 0, coherence = 1;
+    float colorful = 1;      // 1..2: frames with little grey get a stronger lean (tints have less room)
 };
 
 inline HeroPlan planHero(const float hero[kMixColors], const ColorStats& st)
@@ -145,6 +147,8 @@ inline HeroPlan planHero(const float hero[kMixColors], const ColorStats& st)
     float compCov = st.valid ? coverageAt(st, p.complement) : 0.05f;
     p.castAmt = 0.5f + 0.5f * (1.0f - std::clamp(heroCov / 0.15f, 0.0f, 1.0f));
     p.compAmt = 0.6f + 0.4f * std::clamp(compCov / 0.10f, 0.0f, 1.0f);
+    float neutral = st.valid ? st.neutral : 0.5f;
+    p.colorful = 1.0f + (1.0f - std::clamp(neutral / 0.5f, 0.0f, 1.0f));
     return p;
 }
 
@@ -172,7 +176,10 @@ inline void heroMixer(const HeroPlan& p, const float hero[kMixColors], const Col
     }
     float w[kMixColors];
     mixWeights(p.complement, w);
-    for (int i = 0; i < kMixColors; ++i) m.sat[i] += 0.15f * p.compAmt * p.strength * p.coherence * w[i];
+    // the complement pops a little with warm heroes (teal against orange); with a cool hero the
+    // complement is amber, and pushing it would pull the picture away from the hero
+    float pop = 0.15f * p.compAmt * p.strength * p.coherence * p.heroHigh;
+    for (int i = 0; i < kMixColors; ++i) m.sat[i] += pop * w[i];
 }
 
 inline void heroTints(const HeroPlan& p, float amount, LookParams& k)
@@ -181,7 +188,8 @@ inline void heroTints(const HeroPlan& p, float amount, LookParams& k)
     float a = std::clamp(amount, 0.0f, 1.5f) * p.strength * p.coherence;
     float hx = std::cos(p.hue * kDeg), hy = std::sin(p.hue * kDeg);
     float cx = std::cos(p.complement * kDeg), cy = std::sin(p.complement * kDeg);
-    float heroT = 0.03f * a, compT = 0.034f * a * p.compAmt, castT = 0.02f * a * p.castAmt;
+    // cool heroes keep their warm complement light: the picture should still read as the hero
+    float heroT = 0.03f * a, compT = 0.034f * a * p.compAmt * (0.5f + 0.5f * p.heroHigh), castT = 0.02f * a * p.castAmt * p.colorful;
     float hiHero = heroT * p.heroHigh, shHero = heroT * (1.0f - p.heroHigh);
     float hiComp = compT * (1.0f - p.heroHigh), shComp = compT * p.heroHigh;
     k.hiA += hiHero * hx + hiComp * cx;
@@ -190,7 +198,9 @@ inline void heroTints(const HeroPlan& p, float amount, LookParams& k)
     k.shB += shHero * hy + shComp * cy;
     k.castA += castT * hx;
     k.castB += castT * hy;
-    k.tintProtect = std::max(k.tintProtect, 0.85f);
+    // colorful pixels keep their hue but still lean (see applyLook), so skin and wood stay
+    // themselves and still belong to the look
+    k.tintProtect = std::max(k.tintProtect, 0.7f);
 }
 
 } // namespace drs

@@ -147,8 +147,9 @@ int main()
 
     // --- adapts to the frame ---
     // the less of the hero color the frame has, the more the picture leans to it
-    std::vector<Px> noOrange = {{shadow, 10}, {mid, 15}, {high, 10}, {leaf, 10}, {sky, 10}};
-    std::vector<Px> lotsOrange = {{shadow, 5}, {mid, 5}, {high, 5}, {skin, 30}, {wood, 30}};
+    // (same amount of grey in both, so only the hero coverage differs)
+    std::vector<Px> noOrange = {{shadow, 10}, {mid, 15}, {high, 10}, {leaf, 20}, {sky, 20}};
+    std::vector<Px> lotsOrange = {{shadow, 10}, {mid, 15}, {high, 10}, {skin, 20}, {wood, 20}};
     float castLow = chroma(colorLookPixel(mid, heroLook(kOrange, 1, statsOf(noOrange))));
     float castHigh = chroma(colorLookPixel(mid, heroLook(kOrange, 1, statsOf(lotsOrange))));
     std::printf("       mid grey tint: frame without orange %.4f, frame full of orange %.4f\n", castLow, castHigh);
@@ -159,6 +160,28 @@ int main()
     HeroPlan pNo = planHero(std::vector<float>{0, 1, 0, 0, 0, 0, 0}.data(), statsOf(noSky));
     HeroPlan pBig = planHero(std::vector<float>{0, 1, 0, 0, 0, 0, 0}.data(), statsOf(bigSky));
     check(pBig.compAmt > pNo.compAmt, "frame with sky gets more of the teal complement");
+    // frames with little grey lean harder (the tints have fewer neutral pixels to land on)
+    std::vector<Px> greyRoom = {{shadow, 30}, {mid, 40}, {high, 30}, {skin, 5}};
+    std::vector<Px> busyRoom = {{shadow, 3}, {mid, 4}, {high, 3}, {skin, 30}, {wood, 30}, {leaf, 30}};
+    HeroPlan pGrey = planHero(std::vector<float>{0, 0, 0, 0, 1, 0, 0}.data(), statsOf(greyRoom));
+    HeroPlan pBusy = planHero(std::vector<float>{0, 0, 0, 0, 1, 0, 0}.data(), statsOf(busyRoom));
+    check(pBusy.colorful > 1.5f && pGrey.colorful < 1.1f, "colorful frame -> stronger lean");
+    // a cool hero must still pull a warm, colorful frame toward itself
+    {
+        ColorStats bs = statsOf(busyRoom);
+        ColorLookSettings aq = heroLook(kAqua, 0.8f, bs);
+        float hx = std::cos(195.0f * kDeg), hy = std::sin(195.0f * kDeg);
+        float lean = 0;
+        for (V3 c : {skin, wood, leaf}) {
+            V3 a0 = lab(c), a1 = lab(colorLookPixel(c, aq));
+            lean += (a1.y - a0.y) * hx + (a1.z - a0.z) * hy;
+        }
+        std::printf("       Aqua 0.8 on a warm, colorful frame: lean toward cyan %.4f\n", lean / 3);
+        check(lean > 0.005f * 3, "cool hero still leans a warm colorful frame toward it");
+        float wh = hueGap(hueDeg(colorLookPixel(wood, aq)), hueDeg(wood));
+        check(wh < 15, "... while wood keeps its hue (< 15 deg)");
+    }
+
     // unmeasured frame still works
     check(chroma(colorLookPixel(high, heroLook(kOrange, 1, ColorStats{}))) > 0.02f, "works without frame stats");
 
