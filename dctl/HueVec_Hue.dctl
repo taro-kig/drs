@@ -1,0 +1,156 @@
+// HueVec_Hue.dctl
+// Shift each hue toward a neighbor, luminance kept.
+// + = toward the next color in R > Y > G > C > B > M > R, - = toward the previous.
+// Full scale moves a color halfway (30 degrees) to its neighbor.
+//
+// Hue vectors: Red, Yellow, Green, Cyan, Blue, Magenta, 60 degrees apart on
+// DaVinci Wide Gamut primaries. Neighboring vectors blend seamlessly.
+// Deep keeps the effect out of the highlights (higher = more of the bright range
+// left clean); tick Highlight to see the excluded area in magenta.
+// Use the node's Global Blend to mix. Order with the siblings: Density, Sat, Hue.
+// DaVinci Wide Gamut / DaVinci Intermediate working space.
+//
+// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+
+DEFINE_UI_PARAMS(rHue, Red Hue, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(yHue, Yellow Hue, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(gHue, Green Hue, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(cHue, Cyan Hue, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(bHue, Blue Hue, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(mHue, Magenta Hue, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(hueRange, Hue Range, DCTLUI_SLIDER_FLOAT, 1.0, 0.4, 2.0, 0.01)
+DEFINE_UI_PARAMS(deep, Deep, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(hlView, Highlight, DCTLUI_CHECK_BOX, 0)
+
+// ---- shared Hue Vector core (same in HueVec_Density / HueVec_Sat / HueVec_Hue) ----
+
+// DaVinci Intermediate <-> linear
+__DEVICE__ float diToLin(float t)
+{
+    if (t <= 0.02740668f) return t / 10.44426855f;
+    return _exp2f(t / 0.07329248f - 7.0f) - 0.0075f;
+}
+
+__DEVICE__ float linToDi(float x)
+{
+    if (x <= 0.00262409f) return x * 10.44426855f;
+    return (_log2f(x + 0.0075f) + 7.0f) * 0.07329248f;
+}
+
+__DEVICE__ float lumaDwg(float3 c)
+{
+    return 0.27411851f * c.x + 0.87363190f * c.y - 0.14775041f * c.z;
+}
+
+__DEVICE__ float smooth01(float e0, float e1, float x)
+{
+    float t = _fminf(_fmaxf((x - e0) / (e1 - e0), 0.0f), 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// weight of the vector at `center` (0..5) for hue h (0..6), raised-cosine window
+__DEVICE__ float vecWeight(float h, float center, float range)
+{
+    float d = h - center;
+    if (d > 3.0f) d -= 6.0f;
+    if (d < -3.0f) d += 6.0f;
+    float a = _fabs(d) / range;
+    if (a >= 1.0f) return 0.0f;
+    float c = _cosf(1.5707963f * a);
+    return c * c;
+}
+
+// hue (0..6) / saturation / value -> RGB; S may exceed 1 for out-of-gamut input
+__DEVICE__ float3 hsvToRgb(float h, float s, float v)
+{
+    float c = v * s;
+    float hm = h - 2.0f * _floor(h * 0.5f);
+    float x = c * (1.0f - _fabs(hm - 1.0f));
+    float m = v - c;
+    float3 o;
+    if (h < 1.0f)      o = make_float3(c, x, 0.0f);
+    else if (h < 2.0f) o = make_float3(x, c, 0.0f);
+    else if (h < 3.0f) o = make_float3(0.0f, c, x);
+    else if (h < 4.0f) o = make_float3(0.0f, x, c);
+    else if (h < 5.0f) o = make_float3(x, 0.0f, c);
+    else               o = make_float3(c, 0.0f, x);
+    return make_float3(o.x + m, o.y + m, o.z + m);
+}
+
+// kind: 0 = density, 1 = saturation, 2 = hue. v0..v5 = R Y G C B M, glob = all hues.
+__DEVICE__ float3 hueVectors(float3 di, int kind, float v0, float v1, float v2, float v3, float v4, float v5,
+                             float glob, float range, float deep, int hlView)
+{
+    float3 lin = make_float3(diToLin(di.x), diToLin(di.y), diToLin(di.z));
+    float mx = _fmaxf(lin.x, _fmaxf(lin.y, lin.z));
+    float mn = _fminf(lin.x, _fminf(lin.y, lin.z));
+    float Y0 = lumaDwg(lin);
+
+    // Deep: 1 = full effect, fading to 0 above a cutoff that drops as Deep rises
+    float ev = _log2f(_fmaxf(Y0, 1.0e-6f) / 0.18f);
+    float cut = 5.0f - 6.0f * deep;
+    float keep = deep > 0.0f ? 1.0f - smooth01(cut - 1.5f, cut + 1.0f, ev) : 1.0f;
+
+    if (hlView == 1) {
+        // excluded highlights in magenta over a grey picture
+        float e = 1.0f - keep;
+        float g = _fmaxf(Y0, 0.0f);
+        return make_float3(linToDi(g + (0.9f - g) * e), linToDi(g + (0.05f - g) * e), linToDi(g + (0.7f - g) * e));
+    }
+
+    float chroma = mx - mn;
+    if (mx <= 1.0e-6f || chroma <= 1.0e-7f) return di;
+
+    // hexcone hue 0..6 on DWG primaries
+    float h;
+    if (mx == lin.x)      h = (lin.y - lin.z) / chroma;
+    else if (mx == lin.y) h = 2.0f + (lin.z - lin.x) / chroma;
+    else                  h = 4.0f + (lin.x - lin.y) / chroma;
+    if (h < 0.0f) h += 6.0f;
+    float s = chroma / mx;
+
+    float amt = glob;
+    amt += vecWeight(h, 0.0f, range) * v0;
+    amt += vecWeight(h, 1.0f, range) * v1;
+    amt += vecWeight(h, 2.0f, range) * v2;
+    amt += vecWeight(h, 3.0f, range) * v3;
+    amt += vecWeight(h, 4.0f, range) * v4;
+    amt += vecWeight(h, 5.0f, range) * v5;
+    amt *= keep;
+
+    float h2 = h;
+    float s2 = s;
+    float dens = 1.0f;
+    float up = 0.0f;
+    float down = 0.0f;
+    if (kind == 2) {
+        h2 = h + 0.5f * amt; // full scale = halfway (30 deg) to the neighbor
+        if (h2 < 0.0f) h2 += 6.0f;
+        if (h2 >= 6.0f) h2 -= 6.0f;
+    } else if (kind == 1) {
+        up = _fmaxf(amt, 0.0f);
+        down = _fminf(amt, 0.0f);
+    } else {
+        float d = amt * _fminf(s, 1.0f); // neutrals get no density
+        dens = _exp2f(-1.5f * d);        // about 1.5 stops darker at full
+        up = 0.25f * _fmaxf(d, 0.0f);    // a little subtractive saturation stays rich
+    }
+    // increases approach full saturation without passing it (stays in gamut);
+    // input already outside (s >= 1) is only ever reduced
+    if (up > 0.0f && s < 1.0f) s2 = 1.0f - _powf(1.0f - s, 1.0f + up);
+    s2 = _fmaxf(s2 * (1.0f + down), 0.0f);
+
+    // rebuild, keep the original luminance, then apply density
+    float3 o = hsvToRgb(h2, s2, mx);
+    float Y1 = lumaDwg(o);
+    if (Y1 > 1.0e-6f && Y0 > 0.0f) {
+        float k = _fminf(_fmaxf(Y0 / Y1, 0.25f), 4.0f);
+        o = make_float3(o.x * k, o.y * k, o.z * k);
+    }
+    return make_float3(linToDi(o.x * dens), linToDi(o.y * dens), linToDi(o.z * dens));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    return hueVectors(make_float3(p_R, p_G, p_B), 2, rHue, yHue, gHue, cHue, bHue, mHue, 0.0f, hueRange, deep, hlView);
+}
