@@ -236,10 +236,10 @@ struct ColorLookSettings {
 // on[i] / pick[i]: the seven manual slots (display sRGB swatches).
 inline ColorLookSettings makeColorLook(const float hero[kMixColors], const ColorStats& cs, const bool on[kMixColors],
                                        const V3 pick[kMixColors], float amount, float contrast, float brightness,
-                                       float autoStrength, const ToneStats& stats)
+                                       float autoStrength, const ToneStats& stats, int placement = kPlaceAuto)
 {
     ColorLookSettings s;
-    const HeroPlan plan = planHero(hero, cs);
+    const HeroPlan plan = planHero(hero, cs, placement);
     heroMixer(plan, hero, cs, s.mixer);
     std::vector<V3> palette;
     std::vector<KeyInfo> keys;

@@ -2,9 +2,11 @@
 //
 // The user only says which colors should lead and how much (7 sliders, 0..1). Everything
 // else is decided here from the frame:
-//   - the hero hue leans the whole picture: warm heroes go into the highlights, cool ones
-//     into the shadows, and a complementary color takes the other end (orange -> teal
-//     shadows, cyan -> a little amber in the highlights)
+//   - the hero hue leans the whole picture and goes to the end of the tonal range whose light
+//     matches it: in daylight (warm sun, blue shade) warm heroes go into the highlights and
+//     cool ones into the shadows; in a night interior (blue window, warm lamps) the other
+//     way round. A complementary color takes the other end (orange -> teal, cyan -> amber).
+//     Placement can override it.
 //   - the less of the hero color the frame already has, the more the picture leans to it;
 //     the more complement-colored the frame is (sky, foliage...), the more of the
 //     complement it gets
@@ -30,7 +32,15 @@ namespace drs {
 // `colorHist` in ClLut.cpp mirrors colorBin() exactly.
 constexpr int kHueBins = 36, kChromaBins = 8, kLightBins = 8;
 constexpr int kColorBins = kHueBins * kChromaBins * kLightBins;
-constexpr float kChromaBinWidth = 0.03f;
+// chroma bins are finer near grey (edges 0.2 * (k/8)^2: 0, .003, .0125, .028, .05, .078, .11,
+// .15, .2+), so faint color casts on near-neutral surfaces are told apart from true greys
+constexpr float kChromaMax = 0.2f;
+inline int chromaBin(float C) { return std::clamp(int(std::sqrt(std::max(C, 0.0f) / kChromaMax) * kChromaBins), 0, kChromaBins - 1); }
+inline float chromaBinCenter(int cb)
+{
+    float a = float(cb) / kChromaBins, b = float(cb + 1) / kChromaBins;
+    return kChromaMax * 0.5f * (a * a + b * b);
+}
 
 inline int colorBin(V3 di)
 {
@@ -40,7 +50,7 @@ inline int colorBin(V3 di)
     float h = std::atan2(lab.z, lab.y) * 57.29578f;
     if (h < 0.0f) h += 360.0f;
     int hb = std::clamp(int(h / 10.0f), 0, kHueBins - 1);
-    int cb = std::clamp(int(C / kChromaBinWidth), 0, kChromaBins - 1);
+    int cb = chromaBin(C);
     int lb = std::clamp(int(lab.x * kLightBins), 0, kLightBins - 1);
     return (hb * kChromaBins + cb) * kLightBins + lb;
 }
@@ -49,20 +59,30 @@ inline int colorBin(V3 di)
 struct ColorStats {
     float coverage[kMixColors] = {}; // share of the frame that clearly is this color
     float neutral = 1.0f;            // share of the frame that is grey-ish
+    // color temperature of the light already in the frame: chroma-weighted warmth (+ amber,
+    // - blue) of the bright and of the dark pixels, in Oklab chroma units
+    float warmHigh = 0.0f, warmLow = 0.0f;
     bool valid = false;
 };
+
+inline float warmth(float hdeg);
 
 inline ColorStats statsFromColorHist(const std::vector<uint32_t>& hist)
 {
     ColorStats st;
     if (int(hist.size()) != kColorBins) return st;
     double total = 0, neutral = 0, cov[kMixColors] = {};
+    double hiN = 0, hiW = 0, loN = 0, loW = 0;
     for (int hb = 0; hb < kHueBins; ++hb) {
         float w[kMixColors];
         mixWeights(hb * 10.0f + 5.0f, w);
+        const float hw = warmth(hb * 10.0f + 5.0f);
         for (int cb = 0; cb < kChromaBins; ++cb) {
-            float C = (cb + 0.5f) * kChromaBinWidth;
+            float C = chromaBinCenter(cb);
             float colored = smoothstep(0.02f, 0.07f, C);
+            // the light's color shows on near-neutral surfaces (white balance logic), not on
+            // saturated objects like sky or skin: bins 1..3 (C .003 to .05), true greys excluded
+            float castW = (cb >= 1 && cb <= 3) ? C : 0.0f;
             for (int lb = 0; lb < kLightBins; ++lb) {
                 double n = hist[size_t((hb * kChromaBins + cb) * kLightBins + lb)];
                 if (n == 0) continue;
@@ -71,12 +91,22 @@ inline ColorStats statsFromColorHist(const std::vector<uint32_t>& hist)
                 neutral += n * (1.0f - colored);
                 double g = n * colored * smoothstep(0.1f, 0.25f, L); // near-black hues don't count
                 for (int i = 0; i < kMixColors; ++i) cov[i] += g * w[i];
+                // light temperature: bright (L > 0.62) and dark (0.12 < L < 0.38) pixels
+                if (L > 0.62f) {
+                    hiN += n;
+                    hiW += n * castW * hw;
+                } else if (L > 0.12f && L < 0.38f) {
+                    loN += n;
+                    loW += n * castW * hw;
+                }
             }
         }
     }
     if (total <= 0) return st;
     for (int i = 0; i < kMixColors; ++i) st.coverage[i] = float(cov[i] / total);
     st.neutral = float(neutral / total);
+    st.warmHigh = hiN > 0 ? float(hiW / hiN) : 0.0f;
+    st.warmLow = loN > 0 ? float(loW / loN) : 0.0f;
     st.valid = true;
     return st;
 }
@@ -122,7 +152,25 @@ struct HeroPlan {
     float castAmt = 0, compAmt = 0, coherence = 1;
     float colorful = 1;      // 1..2: frames with little grey get a stronger lean (tints have less room)
     bool paired = false;     // two far-apart heroes: the second one takes the complement's place
+    float light = 0.5f;      // -1..1: + = scene's highlights are the warm end (sun / shade), - = the cool end
 };
+
+// Where the hero goes. Auto follows the light already in the scene.
+enum Placement { kPlaceAuto = 0, kPlaceHighlights = 1, kPlaceShadows = 2 };
+
+// Which end of the tonal range is warm in this scene. Daylight (warm sun, blue shade) is +,
+// a scene whose highlights are clearly cool (blue window, pale sky) over warmer shadows
+// (lamps, earth, wood) is -. Anything unclear keeps the classic +0.5 (warm highlights). Warm
+// shadows alone don't flip it: they are often just brown things (wood, earth), not the light.
+inline float sceneLight(const ColorStats& st)
+{
+    if (!st.valid) return 0.5f;
+    float tilt = st.warmHigh - st.warmLow;
+    float coolTop = std::clamp(-st.warmHigh / 0.01f, 0.0f, 1.0f);
+    float l = 0.5f + 0.5f * std::clamp(tilt / 0.01f, 0.0f, 1.0f) -
+              1.5f * coolTop * std::clamp(-tilt / 0.01f, 0.0f, 1.0f);
+    return std::clamp(l, -1.0f, 1.0f);
+}
 
 inline float hueGapDeg(float a, float b) { return std::fabs(std::fmod(a - b + 540.0f, 360.0f) - 180.0f); }
 
@@ -150,9 +198,10 @@ inline bool heroGroup(const float hero[kMixColors], const bool use[kMixColors], 
 // Heroes close to the strongest one (within 75 degrees: Red + Orange, Blue + Magenta) blend
 // into one hero. Heroes further away form a second group that takes the complement's place,
 // so Orange + Aqua is teal and orange with both colors as chosen, not an average (green).
-inline HeroPlan planHero(const float hero[kMixColors], const ColorStats& st)
+inline HeroPlan planHero(const float hero[kMixColors], const ColorStats& st, int placement = kPlaceAuto)
 {
     HeroPlan p;
+    p.light = sceneLight(st);
     int top = -1;
     for (int i = 0; i < kMixColors; ++i)
         if (hero[i] > 0.0f && (top < 0 || hero[i] > hero[top])) top = i;
@@ -176,11 +225,16 @@ inline HeroPlan planHero(const float hero[kMixColors], const ColorStats& st)
         // and the warmer of the two takes the highlights
         p.complement = farHue;
         p.compAmt = std::clamp(farStrength / p.strength, 0.0f, 1.0f) * farCoh;
-        p.heroHigh = smoothstep(-0.3f, 0.3f, warmth(p.hue) - warmth(farHue));
+        // the end of the scene's light that matches it: warmer of the two goes where the scene is warm
+        if (placement == kPlaceHighlights) p.heroHigh = 1.0f;
+        else if (placement == kPlaceShadows) p.heroHigh = 0.0f;
+        else p.heroHigh = smoothstep(-0.3f, 0.3f, (warmth(p.hue) - warmth(farHue)) * p.light);
         return p;
     }
     p.complement = complementHue(p.hue);
-    p.heroHigh = smoothstep(-0.4f, 0.4f, warmth(p.hue));
+    if (placement == kPlaceHighlights) p.heroHigh = 1.0f;
+    else if (placement == kPlaceShadows) p.heroHigh = 0.0f;
+    else p.heroHigh = smoothstep(-0.4f, 0.4f, warmth(p.hue) * p.light);
     float compCov = st.valid ? coverageAt(st, p.complement) : 0.05f;
     p.compAmt = 0.6f + 0.4f * std::clamp(compCov / 0.10f, 0.0f, 1.0f);
     return p;

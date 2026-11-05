@@ -91,6 +91,7 @@ public:
             m_On[i] = fetchBooleanParam(pid("on", i));
             m_Color[i] = fetchRGBParam(pid("color", i));
         }
+        m_Placement = fetchChoiceParam("placement");
         m_Amount = fetchDoubleParam("amount");
         m_Auto = fetchDoubleParam("autoTone");
         m_Bright = fetchDoubleParam("brightness");
@@ -168,6 +169,8 @@ public:
             // rounded like the tone stats: frame-to-frame noise neither re-bakes nor flickers
             for (float& c : cstats.coverage) c = std::round(c * 100.0f) / 100.0f;
             cstats.neutral = std::round(cstats.neutral * 100.0f) / 100.0f;
+            cstats.warmHigh = std::round(cstats.warmHigh * 500.0f) / 500.0f;
+            cstats.warmLow = std::round(cstats.warmLow * 500.0f) / 500.0f;
         }
 
         // 2. settings -> cached LUT
@@ -191,10 +194,13 @@ public:
         stats.p95 = q(stats.p95);
         key.insert(key.end(), {amount, autoStrength, bright, contrast, stats.median, stats.p05, stats.p95});
         for (int i = 0; i < drs::kMixColors; ++i) key.insert(key.end(), {hero[i], cstats.coverage[i]});
-        key.insert(key.end(), {cstats.neutral, cstats.valid ? 1.0 : 0.0});
+        int placement = 0;
+        m_Placement->getValueAtTime(t, placement);
+        key.insert(key.end(), {cstats.neutral, cstats.warmHigh, cstats.warmLow, cstats.valid ? 1.0 : 0.0,
+                               double(placement)});
 
         drs::ColorLookSettings s =
-            drs::makeColorLook(hero, cstats, on, pick, amount, contrast, bright, autoStrength, stats);
+            drs::makeColorLook(hero, cstats, on, pick, amount, contrast, bright, autoStrength, stats, placement);
         auto lut = m_Cache.get(key, 65, [s](drs::V3 c) { return drs::colorLookPixel(c, s); });
 
         // 3. apply
@@ -226,6 +232,7 @@ private:
     Clip* m_Dst;
     Clip* m_Src;
     DoubleParam* m_Hero[drs::kMixColors];
+    ChoiceParam* m_Placement;
     BooleanParam* m_On[drs::kMixColors];
     RGBParam* m_Color[drs::kMixColors];
     DoubleParam* m_Amount;
@@ -309,6 +316,17 @@ void ColorLookFactory::describeInContext(ImageEffectDescriptor& desc, ContextEnu
         h->setParent(*colors);
         page->addChild(*h);
     }
+    ChoiceParamDescriptor* place = desc.defineChoiceParam("placement");
+    place->setLabels("Placement", "Placement", "Placement");
+    place->setHint("Where the hero color goes. Auto follows the light in the frame: daylight (warm sun, blue "
+                   "shade) puts warm colors in the highlights, a night interior (blue window, warm lamps) the "
+                   "other way round.");
+    place->appendOption("Auto");
+    place->appendOption("Hero in Highlights");
+    place->appendOption("Hero in Shadows");
+    place->setDefault(0);
+    place->setParent(*colors);
+    page->addChild(*place);
 
     GroupParamDescriptor* tone = desc.defineGroupParam("tone");
     tone->setLabels("Tone", "Tone", "Tone");

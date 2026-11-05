@@ -224,6 +224,41 @@ int main()
     check(ba.paired && hueGap(ba.hue, 260) < 1 && ba.heroHigh < 0.1f,
           "Blue 1 + Orange 0.5 -> blue leads (shadows), orange in the highlights");
 
+    // --- placement follows the light in the scene ---
+    {
+        // faint casts on near-neutral surfaces (Oklab chroma ~0.02) tell the light's color
+        auto cast = [](float L, float hdeg) {
+            V3 lab = {L, 0.02f * std::cos(hdeg * kDeg), 0.02f * std::sin(hdeg * kDeg)};
+            V3 d = mul(kXyzToDwg, oklabToXyz(lab));
+            return V3{linToDi(d.x), linToDi(d.y), linToDi(d.z)};
+        };
+        // daylight: warm sunlit walls, blue shade
+        std::vector<Px> day = {{cast(0.8f, 60), 30}, {cast(0.25f, 240), 30}, {mid, 20}, {skin, 10}};
+        // night interior: blue window light up top, warm lamp-lit shadows
+        std::vector<Px> night = {{cast(0.8f, 230), 30}, {cast(0.25f, 55), 30}, {mid, 20}, {skin, 10}};
+        // warm shadows alone (brown wood) under neutral highlights: not the light, no flip
+        std::vector<Px> wooden = {{high, 30}, {cast(0.25f, 55), 30}, {mid, 20}, {wood, 20}};
+        ColorStats sd = statsOf(day), sn = statsOf(night), sw = statsOf(wooden);
+        std::printf("       scene light: day %+.2f, night %+.2f, warm-shadows-only %+.2f, room %+.2f\n", sceneLight(sd),
+                    sceneLight(sn), sceneLight(sw), sceneLight(cs));
+        check(sceneLight(sd) > 0.9f, "daylight scene: warm end = highlights");
+        check(sceneLight(sn) < -0.5f, "night interior: warm end = shadows");
+        check(std::fabs(sceneLight(sw) - 0.5f) < 0.01f, "warm shadows alone (wood) don't flip it");
+        check(std::fabs(sceneLight(cs) - 0.5f) < 0.01f, "room with saturated sky/skin only: classic default");
+        const float o[kMixColors] = {0, 1, 0, 0, 0, 0, 0}, aq[kMixColors] = {0, 0, 0, 0, 1, 0, 0};
+        check(planHero(o, sd).heroHigh > 0.9f && planHero(aq, sd).heroHigh < 0.1f, "day: orange up, aqua down");
+        check(planHero(o, sn).heroHigh < 0.1f && planHero(aq, sn).heroHigh > 0.9f, "night: orange down, aqua up");
+        V3 nh = colorLookPixel(high, heroLookMulti(o, sn)), ns = colorLookPixel(shadow, heroLookMulti(o, sn));
+        check(hueGap(hueDeg(ns), 60) < 25 && hueGap(hueDeg(nh), 210) < 30,
+              "night + Orange: orange shadows, teal highlights");
+        // overrides
+        check(planHero(o, sn, kPlaceHighlights).heroHigh == 1.0f, "Placement: Hero in Highlights overrides");
+        check(planHero(o, sd, kPlaceShadows).heroHigh == 0.0f, "Placement: Hero in Shadows overrides");
+        const float oa[kMixColors] = {0, 1, 0, 0, 0.8f, 0, 0};
+        check(planHero(oa, sd).heroHigh > 0.9f && planHero(oa, sn).heroHigh < 0.1f,
+              "pair Orange + Aqua follows the scene too");
+    }
+
     // --- greys stay smooth: no jumps along a grey ramp ---
     float worstStep = 0;
     V3 prev = colorLookPixel(greyDi(-6), orange);

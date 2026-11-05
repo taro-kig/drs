@@ -180,7 +180,7 @@ __kernel void colorHist(__global const float* src, int W, int H, int step, __glo
     float h = atan2(B, A) * 57.29578f;
     if (h < 0.0f) h += 360.0f;
     int hb = clamp((int)(h / 10.0f), 0, 35);
-    int cb = clamp((int)(C / 0.03f), 0, 7);
+    int cb = clamp((int)(sqrt(C / 0.2f) * 8.0f), 0, 7);
     int lb = clamp((int)(L * 8.0f), 0, 7);
     atomic_inc(&hist[(hb * 8 + cb) * 8 + lb]);
 }
