@@ -11,16 +11,17 @@
 // Use the node's Global Blend to mix. Order with the siblings: Density, Sat, Hue.
 // DaVinci Wide Gamut / DaVinci Intermediate working space.
 //
-// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+// NOTE: ASCII only, except emoji in slider labels. Non-ASCII anywhere else
+// (code or comments) crashes Resolve on AMD OpenCL. `task lint` checks this.
 
-DEFINE_UI_PARAMS(rDen, Red Den, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(yDen, Yellow Den, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(gDen, Green Den, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(cDen, Cyan Den, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(bDen, Blue Den, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(mDen, Magenta Den, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(glob, Global Den, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(deep, Deep, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(rDen, Red Den 🟥, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(yDen, Yellow Den 🟧, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(gDen, Green Den 🟩, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(cDen, Cyan Den ⬜, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(bDen, Blue Den 🟦, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(mDen, Magenta Den 🟪, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(glob, Global Den ✚, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(deep, Deep ✚, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(hlView, Highlight, DCTLUI_CHECK_BOX, 0)
 
 // ---- shared Hue Vector core (same in HueVec_Density / HueVec_Sat / HueVec_Hue) ----

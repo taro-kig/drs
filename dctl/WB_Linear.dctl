@@ -9,10 +9,11 @@
 //
 // Place it early, right after the input CST (or after SLog3_Normalize).
 //
-// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+// NOTE: ASCII only, except emoji in slider labels. Non-ASCII anywhere else
+// (code or comments) crashes Resolve on AMD OpenCL. `task lint` checks this.
 
-DEFINE_UI_PARAMS(temp, Temperature K, DCTLUI_SLIDER_FLOAT, 6504.0, 2000.0, 15000.0, 1.0)
-DEFINE_UI_PARAMS(tint, Tint, DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 0.1)
+DEFINE_UI_PARAMS(temp, Temperature K 🟦🟧, DCTLUI_SLIDER_FLOAT, 6504.0, 2000.0, 15000.0, 1.0)
+DEFINE_UI_PARAMS(tint, Tint 🟩🟪, DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 0.1)
 
 // DaVinci Intermediate <-> linear
 __DEVICE__ float diToLin(float t)

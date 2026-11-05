@@ -15,7 +15,7 @@ Uses [Task](https://taskfile.dev), pinned in `aqua.yaml`.
 
 ```sh
 task            # list tasks
-task lint       # make sure every DCTL is pure ASCII (runs before install)
+task lint       # make sure every DCTL is ASCII outside slider labels (runs before install)
 task install    # copy dctl/ into Resolve's LUT/drs (also use this to reinstall)
 task status     # show what is installed and what is outdated
 task uninstall  # remove LUT/drs
@@ -32,7 +32,8 @@ The DCTLs then show up as `drs/...` in the DCTL list (ResolveFX DCTL).
 | Linux   | `/opt/resolve/LUT/drs`                                                |
 
 > [!WARNING]
-> Keep DCTL files **pure ASCII**, comments included. Non-ASCII text (e.g. Japanese comments) makes the AMD OpenCL compiler fail and Resolve crashes with `Insufficient Kernel Work Group Size for globalKernel`.
+> Keep DCTL files **ASCII**, comments included. Non-ASCII text in code or comments (e.g. Japanese comments) makes the AMD OpenCL compiler fail and Resolve crashes with `Insufficient Kernel Work Group Size for globalKernel`.
+> The one exception is the **label** of a `DEFINE_UI_PARAMS` line: Resolve only uses it for the UI, so emoji like 🟥🟧🟩⬜🟦🟪✚ are fine there and give the sliders color chips. `task lint` checks exactly this.
 
 ### OFX plugins
 

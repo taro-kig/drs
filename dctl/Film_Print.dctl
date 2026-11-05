@@ -17,22 +17,23 @@
 // 18% grey stays at 18% grey with printer lights at 0. Output stays scene-referred,
 // so keep your usual output transform after it.
 //
-// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+// NOTE: ASCII only, except emoji in slider labels. Non-ASCII anywhere else
+// (code or comments) crashes Resolve on AMD OpenCL. `task lint` checks this.
 
 DEFINE_UI_PARAMS(ptMaster, Printer Density pts, DCTLUI_SLIDER_FLOAT, 0.0, -50.0, 50.0, 0.5)
-DEFINE_UI_PARAMS(ptR, Printer Red pts, DCTLUI_SLIDER_FLOAT, 0.0, -25.0, 25.0, 0.5)
-DEFINE_UI_PARAMS(ptG, Printer Green pts, DCTLUI_SLIDER_FLOAT, 0.0, -25.0, 25.0, 0.5)
-DEFINE_UI_PARAMS(ptB, Printer Blue pts, DCTLUI_SLIDER_FLOAT, 0.0, -25.0, 25.0, 0.5)
+DEFINE_UI_PARAMS(ptR, Printer Red pts 🟥, DCTLUI_SLIDER_FLOAT, 0.0, -25.0, 25.0, 0.5)
+DEFINE_UI_PARAMS(ptG, Printer Green pts 🟩, DCTLUI_SLIDER_FLOAT, 0.0, -25.0, 25.0, 0.5)
+DEFINE_UI_PARAMS(ptB, Printer Blue pts 🟦, DCTLUI_SLIDER_FLOAT, 0.0, -25.0, 25.0, 0.5)
 DEFINE_UI_PARAMS(interimage, Interimage, DCTLUI_SLIDER_FLOAT, 0.25, -1.0, 1.5, 0.01)
 DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 2.0, 0.01)
-DEFINE_UI_PARAMS(conR, Red Layer Contrast, DCTLUI_SLIDER_FLOAT, 0.0, -0.3, 0.3, 0.005)
-DEFINE_UI_PARAMS(conG, Green Layer Contrast, DCTLUI_SLIDER_FLOAT, 0.0, -0.3, 0.3, 0.005)
-DEFINE_UI_PARAMS(conB, Blue Layer Contrast, DCTLUI_SLIDER_FLOAT, 0.0, -0.3, 0.3, 0.005)
+DEFINE_UI_PARAMS(conR, Red Layer Contrast 🟥, DCTLUI_SLIDER_FLOAT, 0.0, -0.3, 0.3, 0.005)
+DEFINE_UI_PARAMS(conG, Green Layer Contrast 🟩, DCTLUI_SLIDER_FLOAT, 0.0, -0.3, 0.3, 0.005)
+DEFINE_UI_PARAMS(conB, Blue Layer Contrast 🟦, DCTLUI_SLIDER_FLOAT, 0.0, -0.3, 0.3, 0.005)
 DEFINE_UI_PARAMS(shoulder, Highlight Rolloff stops, DCTLUI_SLIDER_FLOAT, 5.0, 1.0, 10.0, 0.05)
 DEFINE_UI_PARAMS(floorStops, Print Black stops, DCTLUI_SLIDER_FLOAT, 7.0, 2.0, 12.0, 0.05)
-DEFINE_UI_PARAMS(tintR, Black Tint Red, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.5, 0.01)
-DEFINE_UI_PARAMS(tintG, Black Tint Green, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.5, 0.01)
-DEFINE_UI_PARAMS(tintB, Black Tint Blue, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.5, 0.01)
+DEFINE_UI_PARAMS(tintR, Black Tint Red 🟥, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.5, 0.01)
+DEFINE_UI_PARAMS(tintG, Black Tint Green 🟩, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.5, 0.01)
+DEFINE_UI_PARAMS(tintB, Black Tint Blue 🟦, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.5, 0.01)
 DEFINE_UI_PARAMS(dyeDensity, Dye Density, DCTLUI_SLIDER_FLOAT, 0.3, 0.0, 1.0, 0.01)
 DEFINE_UI_PARAMS(mixAmt, Mix, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.01)
 

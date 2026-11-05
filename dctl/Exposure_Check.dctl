@@ -15,11 +15,12 @@
 //   purple < shadow limit < blue < -4 < cyan < -2 < grey < -0.5
 //   < green (mid grey +-0.5) < grey < +2 < yellow < +4 < orange < highlight limit < red
 //
-// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+// NOTE: ASCII only, except emoji in slider labels. Non-ASCII anywhere else
+// (code or comments) crashes Resolve on AMD OpenCL. `task lint` checks this.
 
 DEFINE_UI_PARAMS(mode, Mode, DCTLUI_COMBO_BOX, 0, { MODE_CLIP, MODE_FALSE }, { Clipping, False Color })
-DEFINE_UI_PARAMS(hiStops, Highlight Limit stops, DCTLUI_SLIDER_FLOAT, 6.5, 0.0, 12.0, 0.1)
-DEFINE_UI_PARAMS(loStops, Shadow Limit stops, DCTLUI_SLIDER_FLOAT, -6.0, -14.0, 0.0, 0.1)
+DEFINE_UI_PARAMS(hiStops, Highlight Limit stops 🟥, DCTLUI_SLIDER_FLOAT, 6.5, 0.0, 12.0, 0.1)
+DEFINE_UI_PARAMS(loStops, Shadow Limit stops 🟦, DCTLUI_SLIDER_FLOAT, -6.0, -14.0, 0.0, 0.1)
 DEFINE_UI_PARAMS(stripes, Zebra Stripes, DCTLUI_CHECK_BOX, 1)
 DEFINE_UI_PARAMS(bypass, Bypass, DCTLUI_CHECK_BOX, 0)
 

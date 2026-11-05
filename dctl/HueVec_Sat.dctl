@@ -11,17 +11,18 @@
 // Use the node's Global Blend to mix. Order with the siblings: Density, Sat, Hue.
 // DaVinci Wide Gamut / DaVinci Intermediate working space.
 //
-// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+// NOTE: ASCII only, except emoji in slider labels. Non-ASCII anywhere else
+// (code or comments) crashes Resolve on AMD OpenCL. `task lint` checks this.
 
-DEFINE_UI_PARAMS(rSat, Red Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(ySat, Yellow Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(gSat, Green Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(cSat, Cyan Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(bSat, Blue Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(mSat, Magenta Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(glob, Global Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(hueRange, Hue Range, DCTLUI_SLIDER_FLOAT, 1.0, 0.4, 2.0, 0.01)
-DEFINE_UI_PARAMS(deep, Deep, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(rSat, Red Sat 🟥, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(ySat, Yellow Sat 🟧, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(gSat, Green Sat 🟩, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(cSat, Cyan Sat ⬜, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(bSat, Blue Sat 🟦, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(mSat, Magenta Sat 🟪, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(glob, Global Sat ✚, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(hueRange, Hue Range ✚, DCTLUI_SLIDER_FLOAT, 1.0, 0.4, 2.0, 0.01)
+DEFINE_UI_PARAMS(deep, Deep ✚, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(hlView, Highlight, DCTLUI_CHECK_BOX, 0)
 
 // ---- shared Hue Vector core (same in HueVec_Density / HueVec_Sat / HueVec_Hue) ----

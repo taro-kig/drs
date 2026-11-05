@@ -34,7 +34,7 @@ tasks:
       - task --list
 
   lint:
-    desc: DCTL が ASCII だけか確認（日本語コメントなどがあると AMD の OpenCL で Resolve が落ちる）
+    desc: DCTL が ASCII だけか確認（スライダーのラベルの絵文字だけは OK。コメントやコードに日本語などがあると AMD の OpenCL で Resolve が落ちる）
     silent: true
     cmds:
       - cmd: >-
@@ -44,13 +44,19 @@ tasks:
             $n = 0;
             foreach ($line in [IO.File]::ReadAllLines($f.FullName, [Text.Encoding]::UTF8)) {
               $n++;
-              if ($line -match "[^\x00-\x7F]") { "$($f.Name):$n non-ASCII: $line"; $bad = $true }
+              $chk = $line -replace "^(\s*DEFINE_UI_PARAMS\([^,]*,)[^,]*,", "`$1,";
+              if ($chk -match "[^\x00-\x7F]") { "$($f.Name):$n non-ASCII outside a slider label: $line"; $bad = $true }
             }
           };
           if ($bad) { exit 1 } else { "lint ok" }'
         platforms: [windows]
       - cmd: >-
-          sh -c 'if LC_ALL=C grep -n "$(printf "[\200-\377]")" dctl/*.dctl; then echo "non-ASCII found"; exit 1; else echo "lint ok"; fi'
+          sh -c 'bad=0;
+          for f in dctl/*.dctl; do
+            out=$(LC_ALL=C sed -E "s/^([[:space:]]*DEFINE_UI_PARAMS\([^,]*,)[^,]*,/\1,/" "$f" | LC_ALL=C grep -n "$(printf "[\200-\377]")");
+            if [ -n "$out" ]; then echo "$out" | sed "s|^|$f:|"; bad=1; fi;
+          done;
+          if [ $bad = 1 ]; then echo "non-ASCII outside a slider label"; exit 1; else echo "lint ok"; fi'
         platforms: [darwin, linux]
 
   install:

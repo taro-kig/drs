@@ -11,7 +11,8 @@
 // Show Ranges paints the frame with both colors at full strength, to see where they go.
 // Protect Black / White keeps pure black and very bright whites clean.
 //
-// NOTE: keep this file pure ASCII (non-ASCII crashes Resolve on AMD OpenCL).
+// NOTE: ASCII only, except emoji in slider labels. Non-ASCII anywhere else
+// (code or comments) crashes Resolve on AMD OpenCL. `task lint` checks this.
 
 DEFINE_UI_PARAMS(shHue, Shadow Hue, DCTLUI_SLIDER_FLOAT, 200.0, 0.0, 360.0, 1.0)
 DEFINE_UI_PARAMS(shAmt, Shadow Amount, DCTLUI_SLIDER_FLOAT, 0.3, 0.0, 1.0, 0.01)
