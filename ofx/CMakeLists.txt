@@ -64,6 +64,7 @@ endfunction()
 
 drs_ofx_plugin(ColorAnchors ColorAnchors/ColorAnchors.cpp)
 drs_ofx_plugin(LookExplorer LookExplorer/LookExplorer.cpp)
+drs_ofx_plugin(ColorMixer ColorMixer/ColorMixer.cpp)
 
 # pixel math tests (no OFX host needed)
 enable_testing()
@@ -87,3 +88,7 @@ add_executable(test_cl tests/test_cl.cpp common/ClLut.cpp)
 target_include_directories(test_cl PRIVATE common ColorAnchors LookExplorer)
 target_link_libraries(test_cl PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME opencl COMMAND test_cl)
+
+add_executable(test_mixer tests/test_mixer.cpp)
+target_include_directories(test_mixer PRIVATE common ColorAnchors ColorMixer)
+add_test(NAME mixer COMMAND test_mixer)
