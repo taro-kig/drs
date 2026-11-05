@@ -65,6 +65,14 @@ static ColorLookSettings heroLook(int band, float s, const ColorStats& cs, float
     return makeColorLook(hero, cs, on, pick, amount, 0, 0, 0, ToneStats{});
 }
 
+static ColorLookSettings heroLookMulti(const float hero[kMixColors], const ColorStats& cs)
+{
+    bool on[kMixColors] = {};
+    V3 pick[kMixColors];
+    for (int i = 0; i < kMixColors; ++i) pick[i] = bandReferenceSrgb(i);
+    return makeColorLook(hero, cs, on, pick, 1, 0, 0, 0, ToneStats{});
+}
+
 enum { kRed, kOrange, kYellow, kGreen, kAqua, kBlue, kMagenta };
 
 int main()
@@ -191,10 +199,30 @@ int main()
     HeroPlan po = planHero(std::vector<float>{0, 1, 0, 0, 0, 0, 0}.data(), cs);
     HeroPlan pb = planHero(std::vector<float>{0, 0, 0, 0, 0, 1, 0}.data(), cs);
     check(po.heroHigh > 0.9f && pb.heroHigh < 0.1f, "warm hero -> highlights, cool hero -> shadows");
-    HeroPlan opp = planHero(std::vector<float>{0, 1, 0, 0, 0, 1, 0}.data(), cs);
-    check(opp.coherence < 0.5f, "opposite heroes mostly cancel instead of fighting");
     HeroPlan two = planHero(std::vector<float>{1, 1, 0, 0, 0, 0, 0}.data(), cs);
-    check(two.hue > 25 && two.hue < 60, "Red + Orange -> a hero between them");
+    check(!two.paired && two.hue > 25 && two.hue < 60, "Red + Orange (close) -> one hero between them");
+    HeroPlan bm = planHero(std::vector<float>{0, 0, 0, 0, 0, 1, 1}.data(), cs);
+    check(!bm.paired && bm.hue > 260 && bm.hue < 325, "Blue + Magenta (close) -> one hero between them");
+
+    // far-apart heroes form a pair instead of averaging into a third color
+    HeroPlan oa = planHero(std::vector<float>{0, 1, 0, 0, 1, 0, 0}.data(), cs);
+    check(oa.paired && hueGap(oa.hue, 60) < 1 && hueGap(oa.complement, 195) < 1,
+          "Orange + Aqua -> a pair (60 / 195), not their average (green)");
+    {
+        const float oaHero[kMixColors] = {0, 0.8f, 0, 0, 0.8f, 0, 0};
+        ColorLookSettings to = heroLookMulti(oaHero, cs);
+        V3 h = colorLookPixel(high, to), sh = colorLookPixel(shadow, to);
+        std::printf("       Orange + Aqua: high hue %.0f C %.3f | shadow hue %.0f C %.3f\n", hueDeg(h), chroma(h),
+                    hueDeg(sh), chroma(sh));
+        check(hueGap(hueDeg(h), 60) < 20 && chroma(h) > 0.02f, "Orange + Aqua: orange highlights");
+        check(hueGap(hueDeg(sh), 195) < 20 && chroma(sh) > 0.015f, "Orange + Aqua: cyan shadows");
+    }
+    HeroPlan og = planHero(std::vector<float>{0, 0.8f, 0, 0.4f, 0, 0, 0}.data(), cs);
+    check(og.paired && og.heroHigh > 0.9f && og.compAmt > 0.4f && og.compAmt < 0.6f,
+          "Orange 0.8 + Green 0.4 -> orange highlights, green shadows at half strength");
+    HeroPlan ba = planHero(std::vector<float>{0, 0.5f, 0, 0, 0, 1, 0}.data(), cs);
+    check(ba.paired && hueGap(ba.hue, 260) < 1 && ba.heroHigh < 0.1f,
+          "Blue 1 + Orange 0.5 -> blue leads (shadows), orange in the highlights");
 
     // --- greys stay smooth: no jumps along a grey ramp ---
     float worstStep = 0;

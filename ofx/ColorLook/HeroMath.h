@@ -121,34 +121,68 @@ struct HeroPlan {
     float heroHigh = 0.5f;   // 1 = hero in the highlights, 0 = in the shadows
     float castAmt = 0, compAmt = 0, coherence = 1;
     float colorful = 1;      // 1..2: frames with little grey get a stronger lean (tints have less room)
+    bool paired = false;     // two far-apart heroes: the second one takes the complement's place
 };
 
-inline HeroPlan planHero(const float hero[kMixColors], const ColorStats& st)
+inline float hueGapDeg(float a, float b) { return std::fabs(std::fmod(a - b + 540.0f, 360.0f) - 180.0f); }
+
+// strength-weighted circular mean of the heroes in `use`; returns false if none
+inline bool heroGroup(const float hero[kMixColors], const bool use[kMixColors], float& hue, float& strength,
+                      float& coherence)
 {
-    HeroPlan p;
     float sum = 0, x = 0, y = 0;
+    strength = 0;
     for (int i = 0; i < kMixColors; ++i) {
-        float s = std::clamp(hero[i], 0.0f, 1.0f);
-        p.strength = std::max(p.strength, s);
+        float s = use[i] ? std::clamp(hero[i], 0.0f, 1.0f) : 0.0f;
+        if (s <= 0.0f) continue;
+        strength = std::max(strength, s);
         sum += s;
         x += s * std::cos(kMixCenters[i] * kDeg);
         y += s * std::sin(kMixCenters[i] * kDeg);
     }
-    if (p.strength <= 0.0f) return p;
-    p.on = true;
-    p.hue = std::atan2(y, x) / kDeg;
-    if (p.hue < 0.0f) p.hue += 360.0f;
-    p.coherence = std::clamp(std::sqrt(x * x + y * y) / sum, 0.0f, 1.0f); // opposite heroes cancel
-    p.complement = complementHue(p.hue);
-    p.heroHigh = smoothstep(-0.4f, 0.4f, warmth(p.hue));
+    if (sum <= 0.0f) return false;
+    hue = std::atan2(y, x) / kDeg;
+    if (hue < 0.0f) hue += 360.0f;
+    coherence = std::clamp(std::sqrt(x * x + y * y) / sum, 0.0f, 1.0f);
+    return true;
+}
 
-    // frame-adaptive amounts (neutral defaults when the frame was not measured)
-    float heroCov = st.valid ? coverageAt(st, p.hue) : 0.05f;
-    float compCov = st.valid ? coverageAt(st, p.complement) : 0.05f;
-    p.castAmt = 0.5f + 0.5f * (1.0f - std::clamp(heroCov / 0.15f, 0.0f, 1.0f));
-    p.compAmt = 0.6f + 0.4f * std::clamp(compCov / 0.10f, 0.0f, 1.0f);
+// Heroes close to the strongest one (within 75 degrees: Red + Orange, Blue + Magenta) blend
+// into one hero. Heroes further away form a second group that takes the complement's place,
+// so Orange + Aqua is teal and orange with both colors as chosen, not an average (green).
+inline HeroPlan planHero(const float hero[kMixColors], const ColorStats& st)
+{
+    HeroPlan p;
+    int top = -1;
+    for (int i = 0; i < kMixColors; ++i)
+        if (hero[i] > 0.0f && (top < 0 || hero[i] > hero[top])) top = i;
+    if (top < 0) return p;
+    bool near[kMixColors], far[kMixColors];
+    for (int i = 0; i < kMixColors; ++i) {
+        near[i] = hueGapDeg(kMixCenters[i], kMixCenters[top]) <= 75.0f;
+        far[i] = !near[i];
+    }
+    p.on = heroGroup(hero, near, p.hue, p.strength, p.coherence);
+    float farHue = 0, farStrength = 0, farCoh = 1;
+    p.paired = heroGroup(hero, far, farHue, farStrength, farCoh);
+
     float neutral = st.valid ? st.neutral : 0.5f;
     p.colorful = 1.0f + (1.0f - std::clamp(neutral / 0.5f, 0.0f, 1.0f));
+    float heroCov = st.valid ? coverageAt(st, p.hue) : 0.05f;
+    p.castAmt = 0.5f + 0.5f * (1.0f - std::clamp(heroCov / 0.15f, 0.0f, 1.0f));
+
+    if (p.paired) {
+        // the user picked the partner: it goes where the complement would, at its own strength,
+        // and the warmer of the two takes the highlights
+        p.complement = farHue;
+        p.compAmt = std::clamp(farStrength / p.strength, 0.0f, 1.0f) * farCoh;
+        p.heroHigh = smoothstep(-0.3f, 0.3f, warmth(p.hue) - warmth(farHue));
+        return p;
+    }
+    p.complement = complementHue(p.hue);
+    p.heroHigh = smoothstep(-0.4f, 0.4f, warmth(p.hue));
+    float compCov = st.valid ? coverageAt(st, p.complement) : 0.05f;
+    p.compAmt = 0.6f + 0.4f * std::clamp(compCov / 0.10f, 0.0f, 1.0f);
     return p;
 }
 
@@ -178,7 +212,7 @@ inline void heroMixer(const HeroPlan& p, const float hero[kMixColors], const Col
     mixWeights(p.complement, w);
     // the complement pops a little with warm heroes (teal against orange); with a cool hero the
     // complement is amber, and pushing it would pull the picture away from the hero
-    float pop = 0.15f * p.compAmt * p.strength * p.coherence * p.heroHigh;
+    float pop = p.paired ? 0.0f : 0.15f * p.compAmt * p.strength * p.coherence * p.heroHigh;
     for (int i = 0; i < kMixColors; ++i) m.sat[i] += pop * w[i];
 }
 
@@ -189,7 +223,7 @@ inline void heroTints(const HeroPlan& p, float amount, LookParams& k)
     float hx = std::cos(p.hue * kDeg), hy = std::sin(p.hue * kDeg);
     float cx = std::cos(p.complement * kDeg), cy = std::sin(p.complement * kDeg);
     // cool heroes keep their warm complement light: the picture should still read as the hero
-    float heroT = 0.03f * a, compT = 0.034f * a * p.compAmt * (0.5f + 0.5f * p.heroHigh), castT = 0.02f * a * p.castAmt * p.colorful;
+    float heroT = 0.03f * a, compT = 0.034f * a * p.compAmt * (p.paired ? 1.0f : 0.5f + 0.5f * p.heroHigh), castT = 0.02f * a * p.castAmt * p.colorful;
     float hiHero = heroT * p.heroHigh, shHero = heroT * (1.0f - p.heroHigh);
     float hiComp = compT * (1.0f - p.heroHigh), shComp = compT * p.heroHigh;
     k.hiA += hiHero * hx + hiComp * cx;
