@@ -7,6 +7,7 @@
 
 #include "ColorMath.h"
 #include "LookMath.h"
+#include "HueVecMath.h"
 #include "Lut3D.h"
 
 using namespace drs;
@@ -86,6 +87,20 @@ int main()
         std::snprintf(name, sizeof(name), "Look %s", kArchetypeNames[cell]);
         compare(name, 65, [k](V3 c) { return applyLook(c, k); }, 0.02f, 0.0005f);
     }
+
+    // Hue Vectors: Richness plus a bit of every per-hue control
+    huevec::Settings hv;
+    hv.richness = 0.8f;
+    hv.balance = 0.6f;
+    hv.deep = 0.3f;
+    hv.density.v[2] = -0.4f;
+    hv.sat.v[4] = 0.5f;
+    hv.sat.range = 0.8f;
+    hv.hue.v[1] = -0.3f;
+    hv.hue.v[0] = 0.4f;
+    // Looser max: the HueVec saturation math (same as the DCTLs) is steep in near-black deep
+    // blues, where restoring luminance takes the gain up to 4x; mid tones stay within ~0.025.
+    compare("Hue Vectors", 65, [&hv](V3 c) { return huevec::processPixel(c, hv); }, 0.08f, 0.0015f);
 
     Lut3D lut;
     lut.bake(5, [](V3 c) { return c; });

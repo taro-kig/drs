@@ -40,7 +40,7 @@ tasks:
       - cmd: >-
           powershell -NoProfile -Command '
           $bad = $false;
-          foreach ($f in Get-ChildItem dctl/*.dctl) {
+          foreach ($f in Get-ChildItem dctl/*.dctl, dctl/legacy/*.dctl) {
             $n = 0;
             foreach ($line in [IO.File]::ReadAllLines($f.FullName, [Text.Encoding]::UTF8)) {
               $n++;
@@ -52,7 +52,7 @@ tasks:
         platforms: [windows]
       - cmd: >-
           sh -c 'bad=0;
-          for f in dctl/*.dctl; do
+          for f in dctl/*.dctl dctl/legacy/*.dctl; do
             out=$(LC_ALL=C sed -E "s/^([[:space:]]*DEFINE_UI_PARAMS\([^,]*,)[^,]*,/\1,/" "$f" | LC_ALL=C grep -n "$(printf "[\200-\377]")");
             if [ -n "$out" ]; then echo "$out" | sed "s|^|$f:|"; bad=1; fi;
           done;
@@ -81,6 +81,24 @@ tasks:
           echo "Resolve: 再起動するか、Project Settings > Color Management > Update Lists"'
         platforms: [darwin, linux]
 
+  install:legacy:
+    desc: install に加えて dctl/legacy/ の古い DCTL も入れる（古いプロジェクトを開くとき用。次の install で消える）
+    silent: true
+    deps: [install]
+    cmds:
+      - cmd: >-
+          powershell -NoProfile -Command '
+          $d = "{{.DCTL_DIR}}";
+          Copy-Item dctl/legacy/*.dctl $d;
+          Get-ChildItem dctl/legacy/*.dctl | ForEach-Object { "installed (legacy): $d/$($_.Name)" }'
+        platforms: [windows]
+      - cmd: |
+          sh -c '
+          d="{{.DCTL_DIR}}"
+          cp dctl/legacy/*.dctl "$d"/ || exit 1
+          for f in dctl/legacy/*.dctl; do echo "installed (legacy): $d/$(basename "$f")"; done'
+        platforms: [darwin, linux]
+
   uninstall:
     desc: LUT/drs ごと消す
     silent: true
@@ -105,7 +123,7 @@ tasks:
           foreach ($n in $names) {
             $a = Join-Path dctl $n; $b = Join-Path $d $n;
             if (-not (Test-Path $b)) { "  [not installed] $n" }
-            elseif (-not (Test-Path $a)) { "  [extra]         $n" }
+            elseif (-not (Test-Path $a)) { if (Test-Path (Join-Path dctl/legacy $n)) { "  [legacy]        $n" } else { "  [extra]         $n" } }
             elseif ((Get-FileHash $a).Hash -ne (Get-FileHash $b).Hash) { "  [outdated]      $n" }
             else { "  [ok]            $n" }
           }'
@@ -115,8 +133,9 @@ tasks:
           d="{{.DCTL_DIR}}"
           [ -d "$d" ] || { echo "not installed ($d)"; exit 0; }
           echo "installed in $d"
-          for n in $( (ls dctl; ls "$d") | sort -u ); do
+          for n in $( (cd dctl && ls *.dctl; ls "$d") | sort -u ); do
             if [ ! -e "$d/$n" ]; then echo "  [not installed] $n"
+            elif [ ! -e "dctl/$n" ] && [ -e "dctl/legacy/$n" ]; then echo "  [legacy]        $n"
             elif [ ! -e "dctl/$n" ]; then echo "  [extra]         $n"
             elif ! cmp -s "dctl/$n" "$d/$n"; then echo "  [outdated]      $n"
             else echo "  [ok]            $n"; fi
