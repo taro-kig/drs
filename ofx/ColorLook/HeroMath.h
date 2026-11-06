@@ -206,14 +206,15 @@ inline HeroPlan planHero(const float hero[kMixColors], const ColorStats& st, int
     for (int i = 0; i < kMixColors; ++i)
         if (hero[i] > 0.0f && (top < 0 || hero[i] > hero[top])) top = i;
     if (top < 0) return p;
-    bool near[kMixColors], far[kMixColors];
+    // (not "near" / "far": windows.h defines those as empty macros)
+    bool closeG[kMixColors], farG[kMixColors];
     for (int i = 0; i < kMixColors; ++i) {
-        near[i] = hueGapDeg(kMixCenters[i], kMixCenters[top]) <= 75.0f;
-        far[i] = !near[i];
+        closeG[i] = hueGapDeg(kMixCenters[i], kMixCenters[top]) <= 75.0f;
+        farG[i] = !closeG[i];
     }
-    p.on = heroGroup(hero, near, p.hue, p.strength, p.coherence);
+    p.on = heroGroup(hero, closeG, p.hue, p.strength, p.coherence);
     float farHue = 0, farStrength = 0, farCoh = 1;
-    p.paired = heroGroup(hero, far, farHue, farStrength, farCoh);
+    p.paired = heroGroup(hero, farG, farHue, farStrength, farCoh);
 
     float neutral = st.valid ? st.neutral : 0.5f;
     p.colorful = 1.0f + (1.0f - std::clamp(neutral / 0.5f, 0.0f, 1.0f));
