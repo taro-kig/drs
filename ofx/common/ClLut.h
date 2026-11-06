@@ -27,4 +27,9 @@ bool clApplyLuts(void* queue, void* src, void* dst, int width, int height, const
 bool clLumaHistogram(void* queue, void* src, int width, int height, int step, int bins, float lo, float hi,
                      std::vector<uint32_t>& out, const char** err);
 
+// Oklab hue x chroma x lightness histogram for Color Look (see colorBin() in HeroMath.h),
+// sampling every `step`-th pixel. Blocks until the result is back on the host.
+bool clColorHistogram(void* queue, void* src, int width, int height, int step, int bins, std::vector<uint32_t>& out,
+                      const char** err);
+
 } // namespace drs

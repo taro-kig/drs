@@ -114,6 +114,9 @@ struct LookParams {
     float sat;
     float shA, shB, hiA, hiB;
     float rot[3];        // radians for skin / green / blue
+    // used by Color Look only (0 in Look Explorer, which keeps it bit-identical):
+    float castA = 0.0f, castB = 0.0f; // tint centered on the mid tones, Oklab a / b
+    float tintProtect = 0.0f;         // 0..1: tints fade out on already-colorful pixels
 };
 
 inline LookParams prepare(const Look& l, float strength)
@@ -199,8 +202,27 @@ inline V3 applyLook(V3 di, const LookParams& k)
     float ws = 1.0f - smoothstep(0.15f, 0.6f, L);
     float wh = smoothstep(0.5f, 0.95f, L);
     float fadeC = smoothstep(0.0f, 0.06f, L); // no tint on pure black
-    a += (k.shA * ws + k.hiA * wh) * fadeC;
-    b += (k.shB * ws + k.hiB * wh) * fadeC;
+    float wc = 1.0f - 0.75f * std::max(ws, wh); // the cast lives mostly in the mid tones
+    float ta = (k.shA * ws + k.hiA * wh + k.castA * wc) * fadeC;
+    float tb = (k.shB * ws + k.hiB * wh + k.castB * wc) * fadeC;
+    if (k.tintProtect > 0.0f) {
+        // on colorful pixels keep the hue: the part of the tint along the pixel's own color
+        // stays (a cool tint makes wood a little less orange), the part that would turn its
+        // hue fades out, and chroma never drops by more than 30%
+        float C0 = std::sqrt(a * a + b * b);
+        if (C0 > 1.0e-5f) {
+            float ux = a / C0, uy = b / C0;
+            float par = ta * ux + tb * uy;
+            float px = ta - par * ux, py = tb - par * uy;
+            float colorful = smoothstep(0.03f, 0.10f, C0); // greys: no reliable own hue, tint as is
+            float keep = 1.0f - k.tintProtect * colorful;
+            par += colorful * (std::max(par, -0.3f * C0) - par);
+            ta = par * ux + px * keep;
+            tb = par * uy + py * keep;
+        }
+    }
+    a += ta;
+    b += tb;
 
     V3 d = mul(kXyzToDwg, oklabToXyz({L, a, b}));
     float r[3] = {d.x, d.y, d.z};

@@ -5,6 +5,7 @@
 #include <random>
 #include <vector>
 
+#include "ColorLookMath.h"
 #include "ColorMath.h"
 #include "LookMath.h"
 #include "HueVecMath.h"
@@ -86,6 +87,21 @@ int main()
         char name[48];
         std::snprintf(name, sizeof(name), "Look %s", kArchetypeNames[cell]);
         compare(name, 65, [k](V3 c) { return applyLook(c, k); }, 0.02f, 0.0005f);
+    }
+
+    // Color Look with hero colors (Orange + a little Aqua) on a measured frame
+    {
+        float hero[kMixColors] = {0, 0.8f, 0, 0, 0.3f, 0, 0};
+        bool on[kMixColors] = {};
+        V3 pick[kMixColors];
+        for (int i = 0; i < kMixColors; ++i) pick[i] = bandReferenceSrgb(i);
+        ColorStats cs;
+        cs.valid = true;
+        cs.coverage[1] = 0.1f;
+        cs.coverage[5] = 0.08f;
+        cs.neutral = 0.5f;
+        ColorLookSettings cl = makeColorLook(hero, cs, on, pick, 1, 0, 0, 0, ToneStats{});
+        compare("Color Look hero", 65, [cl](V3 c) { return colorLookPixel(c, cl); }, 0.02f, 0.0005f);
     }
 
     // Hue Vectors: Richness plus a bit of every per-hue control

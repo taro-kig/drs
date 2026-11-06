@@ -83,7 +83,7 @@ add_executable(look_preview tools/look_preview.cpp)
 target_include_directories(look_preview PRIVATE ColorAnchors LookExplorer ColorLook)
 
 add_executable(test_lut tests/test_lut.cpp)
-target_include_directories(test_lut PRIVATE common ColorAnchors LookExplorer HueVectors)
+target_include_directories(test_lut PRIVATE common ColorAnchors LookExplorer HueVectors ColorLook)
 add_test(NAME lut COMMAND test_lut)
 
 # runs the OpenCL kernel on this machine's GPU (skips without OpenCL)
@@ -99,6 +99,10 @@ add_test(NAME mixer COMMAND test_mixer)
 add_executable(test_color_look tests/test_color_look.cpp)
 target_include_directories(test_color_look PRIVATE common ColorAnchors LookExplorer ColorLook)
 add_test(NAME color_look COMMAND test_color_look)
+
+add_executable(test_hero tests/test_hero.cpp)
+target_include_directories(test_hero PRIVATE common ColorAnchors LookExplorer ColorLook)
+add_test(NAME hero COMMAND test_hero)
 
 add_executable(test_huevec tests/test_huevec.cpp)
 target_include_directories(test_huevec PRIVATE common ColorAnchors HueVectors)

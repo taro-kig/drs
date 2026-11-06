@@ -148,6 +148,24 @@ int main()
               std::fabs(gs.p95 - cs.p95) < 0.2f,
           "GPU luminance histogram matches the CPU");
 
+    // colour histogram (Color Look's hero colors) on the GPU vs the CPU
+    std::vector<uint32_t> gc, cc(kColorBins, 0u);
+    t0 = std::chrono::steady_clock::now();
+    bool cok = clColorHistogram(q, src, W, Hh, 4, kColorBins, gc, &err);
+    ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (!cok) std::printf("       error: %s\n", err ? err : "?");
+    for (int y = 0; y < Hh; y += 4)
+        for (int x = 0; x < W; x += 4) {
+            size_t i = (size_t(y) * W + x) * 4;
+            int bin = colorBin({img[i], img[i + 1], img[i + 2]});
+            if (bin >= 0) ++cc[size_t(bin)];
+        }
+    ColorStats gcs = statsFromColorHist(gc), ccs = statsFromColorHist(cc);
+    float covDiff = std::fabs(gcs.neutral - ccs.neutral);
+    for (int i = 0; i < kMixColors; ++i) covDiff = std::fmax(covDiff, std::fabs(gcs.coverage[i] - ccs.coverage[i]));
+    std::printf("       color histogram %.1f ms | max coverage diff GPU vs CPU %.4f\n", ms, covDiff);
+    check(cok && gcs.valid && covDiff < 0.005f, "GPU color histogram matches the CPU");
+
     // contact sheet with 9 looks
     std::vector<Lut3D> looks(9);
     std::vector<const float*> ptrs;
