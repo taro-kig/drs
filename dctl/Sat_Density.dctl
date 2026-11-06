@@ -1,0 +1,121 @@
+// Sat_Density.dctl
+// Film-style density by saturation zone, like Lift / Gamma / Gain but along saturation:
+//   Low Sat Den   muted colors, pastels, near-neutral tints
+//   Mid Sat Den   ordinary colors
+//   High Sat Den  vivid colors
+//   Global Den    everything (except greys)
+// + = deeper and darker (up to about 1.5 stops at full), - = lighter.
+// The three zones overlap smoothly (weights always add up to 1), so there are no edges.
+// Greys are never touched. Sat Boost adds a little saturation along with density so dense
+// colors stay rich instead of turning grey (0 = pure darkening).
+// Deep keeps the effect out of the highlights (higher = more of the bright range left
+// clean); tick Highlight to see the excluded area in magenta.
+// Show Zones paints the zones: blue = low, green = mid, red = high, grey = untouched.
+// Saturation is measured on DaVinci Wide Gamut primaries (like the HueVec tools).
+// DaVinci Wide Gamut / DaVinci Intermediate working space.
+//
+// NOTE: ASCII only, except emoji in slider labels. Non-ASCII anywhere else
+// (code or comments) crashes Resolve on AMD OpenCL. `task lint` checks this.
+
+DEFINE_UI_PARAMS(lowDen, Low Sat Den ⬜, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(midDen, Mid Sat Den 🟨, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(highDen, High Sat Den 🟥, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(globDen, Global Den ✚, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(satBoost, Sat Boost ✚, DCTLUI_SLIDER_FLOAT, 0.25, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(deep, Deep ✚, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(hlView, Highlight, DCTLUI_CHECK_BOX, 0)
+DEFINE_UI_PARAMS(showZones, Show Zones, DCTLUI_CHECK_BOX, 0)
+
+// DaVinci Intermediate <-> linear
+__DEVICE__ float diToLin(float t)
+{
+    if (t <= 0.02740668f) return t / 10.44426855f;
+    return _exp2f(t / 0.07329248f - 7.0f) - 0.0075f;
+}
+
+__DEVICE__ float linToDi(float x)
+{
+    if (x <= 0.00262409f) return x * 10.44426855f;
+    return (_log2f(x + 0.0075f) + 7.0f) * 0.07329248f;
+}
+
+__DEVICE__ float lumaDwg(float3 c)
+{
+    return 0.27411851f * c.x + 0.87363190f * c.y - 0.14775041f * c.z;
+}
+
+__DEVICE__ float smooth01(float e0, float e1, float x)
+{
+    float t = _fminf(_fmaxf((x - e0) / (e1 - e0), 0.0f), 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+__DEVICE__ float3 toDi(float3 c)
+{
+    return make_float3(linToDi(c.x), linToDi(c.y), linToDi(c.z));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    float3 lin = make_float3(diToLin(p_R), diToLin(p_G), diToLin(p_B));
+    float mx = _fmaxf(lin.x, _fmaxf(lin.y, lin.z));
+    float mn = _fminf(lin.x, _fminf(lin.y, lin.z));
+    float Y0 = lumaDwg(lin);
+
+    // Deep: 1 = full effect, fading to 0 above a cutoff that drops as Deep rises
+    float ev = _log2f(_fmaxf(Y0, 1.0e-6f) / 0.18f);
+    float cut = 5.0f - 6.0f * deep;
+    float keep = deep > 0.0f ? 1.0f - smooth01(cut - 1.5f, cut + 1.0f, ev) : 1.0f;
+
+    if (hlView == 1) {
+        float e = 1.0f - keep;
+        float g = _fmaxf(Y0, 0.0f);
+        return toDi(make_float3(g + (0.9f - g) * e, g + (0.05f - g) * e, g + (0.7f - g) * e));
+    }
+
+    float chroma = mx - mn;
+    float s = mx > 1.0e-6f ? chroma / mx : 0.0f;
+    // greys (and near-greys) are left alone
+    float gate = smooth01(0.02f, 0.12f, s);
+
+    // zone weights along saturation, like lift / gamma / gain: they always add up to 1
+    float t = _fminf(s, 1.0f);
+    float wl = (1.0f - t) * (1.0f - t);
+    float wm = 2.0f * t * (1.0f - t);
+    float wh = t * t;
+
+    if (showZones == 1) {
+        // zone colors at a brightness that follows the picture, greys stay grey
+        float v = 0.18f * _exp2f(_fminf(_fmaxf(ev, -5.0f), 3.0f) * 0.5f);
+        float3 z = make_float3(wl * 0.15f + wm * 0.15f + wh * 1.0f,
+                               wl * 0.35f + wm * 0.9f + wh * 0.15f,
+                               wl * 1.0f + wm * 0.2f + wh * 0.1f);
+        float3 zc = make_float3(z.x * v * 1.6f, z.y * v * 1.6f, z.z * v * 1.6f);
+        return toDi(make_float3(v + (zc.x - v) * gate, v + (zc.y - v) * gate, v + (zc.z - v) * gate));
+    }
+
+    if (gate <= 0.0f) return make_float3(p_R, p_G, p_B);
+
+    float amt = (globDen + wl * lowDen + wm * midDen + wh * highDen) * keep * gate;
+    if (amt == 0.0f) return make_float3(p_R, p_G, p_B);
+
+    // saturation: up with positive density (approaching full, never past it),
+    // a little down with negative density
+    float s2 = s;
+    float up = satBoost * _fmaxf(amt, 0.0f);
+    if (up > 0.0f && s < 1.0f) s2 = 1.0f - _powf(1.0f - s, 1.0f + up);
+    s2 = _fmaxf(s2 * (1.0f + 0.5f * satBoost * _fminf(amt, 0.0f)), 0.0f);
+
+    // same hue: scale every channel's distance from the max
+    float k = s > 0.0f ? s2 / s : 1.0f;
+    float3 o = make_float3(mx - (mx - lin.x) * k, mx - (mx - lin.y) * k, mx - (mx - lin.z) * k);
+
+    // keep luminance through the saturation change, then apply density
+    float Y1 = lumaDwg(o);
+    if (Y0 > 0.0f) {
+        float g = Y1 > 1.0e-6f ? _fminf(_fmaxf(Y0 / Y1, 0.25f), 4.0f) : 4.0f;
+        o = make_float3(o.x * g, o.y * g, o.z * g);
+    }
+    float dens = _exp2f(-1.5f * amt);
+    return toDi(make_float3(o.x * dens, o.y * dens, o.z * dens));
+}
