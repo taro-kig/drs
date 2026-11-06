@@ -19,6 +19,7 @@
 #endif
 
 #include "ClLut.h"
+#include "FrameMath.h"
 #include "ColorLookMath.h"
 #include "ColorMath.h"
 #include "LookMath.h"
@@ -165,6 +166,54 @@ int main()
     for (int i = 0; i < kMixColors; ++i) covDiff = std::fmax(covDiff, std::fabs(gcs.coverage[i] - ccs.coverage[i]));
     std::printf("       color histogram %.1f ms | max coverage diff GPU vs CPU %.4f\n", ms, covDiff);
     check(cok && gcs.valid && covDiff < 0.005f, "GPU color histogram matches the CPU");
+
+    // Photo Frame: black-bar scan and the frame kernel vs the CPU compositor
+    {
+        // pillarbox: zero 500 columns on each side of the test image
+        std::vector<float> barred = img;
+        for (int y = 0; y < Hh; ++y)
+            for (int x = 0; x < W; ++x)
+                if (x < 500 || x >= W - 500) std::fill_n(&barred[(size_t(y) * W + x) * 4], 3, 0.0f);
+        H bsrc = CreateBuffer(ctx, (1u << 2) | (1u << 5), bytes, barred.data(), &e);
+        std::vector<float> colMax, rowMax;
+        t0 = std::chrono::steady_clock::now();
+        bool sok = clContentMax(q, bsrc, W, Hh, colMax, rowMax, &err);
+        double sms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        int cx0 = 0, cy0 = 0, cw = 0, ch = 0;
+        if (sok) contentRect(colMax, rowMax, cx0, cy0, cw, ch);
+        std::printf("       bar scan %.1f ms -> content x %d w %d, y %d h %d\n", sms, cx0, cw, cy0, ch);
+        check(sok && cx0 == 500 && cw == W - 1000 && cy0 == 0 && ch == Hh, "GPU finds the black bars");
+
+        FrameDraw d;
+        std::vector<unsigned char> mask(200 * 30, 0);
+        for (int i = 0; i < 200 * 30; i += 3) mask[i] = 255;
+        d.layout = computeLayout(W, Hh, float(cw), float(ch), 0.85f, 0.17f, kAlignLeft, 200, 60);
+        d.cx0 = cx0, d.cy0 = cy0, d.cw = cw, d.ch = ch;
+        d.bg = {0.7f, 0.68f, 0.66f}, d.text = {0.1f, 0.1f, 0.1f}, d.edge = {0.5f, 0.5f, 0.5f}, d.edgeWidth = 3;
+        d.mask = mask.data(), d.tw = 200, d.th = 30;
+        ClFrameArgs fa;
+        fa.cx0 = cx0, fa.cy0 = cy0, fa.cw = cw, fa.ch = ch;
+        fa.px0 = d.layout.photo.x0, fa.py0 = d.layout.photo.y0, fa.pw = d.layout.photo.w, fa.ph = d.layout.photo.h;
+        const float cols[10] = {0.7f, 0.68f, 0.66f, 0.1f, 0.1f, 0.1f, 0.5f, 0.5f, 0.5f, 3.0f};
+        std::copy(cols, cols + 10, fa.colors);
+        fa.mask = mask.data(), fa.tw = 200, fa.th = 30, fa.tx = d.layout.textX, fa.ttop = d.layout.textTop;
+        t0 = std::chrono::steady_clock::now();
+        bool fok = clFrame(q, bsrc, dst, W, Hh, fa, &err);
+        Finish(q);
+        double fms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        if (!fok) std::printf("       error: %s\n", err ? err : "?");
+        ReadBuffer(q, dst, 1, 0, bytes, out.data(), 0, nullptr, nullptr);
+        auto at = [&](int x, int y) { return &barred[(size_t(y) * W + x) * 4]; };
+        float fe = 0;
+        for (int y = 0; y < Hh; y += 7)
+            for (int x = 0; x < W; x += 5) {
+                V3 c = framePixel(at, x, y, d);
+                size_t i = (size_t(y) * W + x) * 4;
+                fe = std::fmax(fe, std::fmax(std::fabs(out[i] - c.x), std::fmax(std::fabs(out[i + 1] - c.y), std::fabs(out[i + 2] - c.z))));
+            }
+        std::printf("       frame %.1f ms, GPU vs CPU max diff %.6f\n", fms, fe);
+        check(fok && fe < 1e-3f, "GPU frame matches the CPU compositor");
+    }
 
     // contact sheet with 9 looks
     std::vector<Lut3D> looks(9);

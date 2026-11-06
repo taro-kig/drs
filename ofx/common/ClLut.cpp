@@ -226,11 +226,92 @@ __kernel void applyLuts(__global const float* src, __global float* dst, int W, i
 }
 )CL";
 
+// Photo Frame kernels: a separate program keeps each source literal small (MSVC limit).
+const char* kFrameSource = R"CL(
+// largest |value| of every column / row, for finding Resolve's black bars
+__kernel void colMax(__global const float* src, int W, int H, __global float* out)
+{
+    int x = get_global_id(0);
+    if (x >= W) return;
+    float m = 0.0f;
+    for (int y = 0; y < H; y++) {
+        int i = (y * W + x) * 4;
+        m = fmax(m, fmax(fabs(src[i]), fmax(fabs(src[i + 1]), fabs(src[i + 2]))));
+    }
+    out[x] = m;
+}
+
+__kernel void rowMax(__global const float* src, int W, int H, __global float* out)
+{
+    int y = get_global_id(0);
+    if (y >= H) return;
+    float m = 0.0f;
+    for (int x = 0; x < W; x++) {
+        int i = (y * W + x) * 4;
+        m = fmax(m, fmax(fabs(src[i]), fmax(fabs(src[i + 1]), fabs(src[i + 2]))));
+    }
+    out[y] = m;
+}
+
+float cr(float t, float a, float b, float c, float d)
+{
+    return b + 0.5f * t * (c - a + t * (2.0f * a - 5.0f * b + 4.0f * c - d + t * (3.0f * (b - c) + d - a)));
+}
+
+float3 fetch(__global const float* src, int W, int x, int y)
+{
+    int i = (y * W + x) * 4;
+    return (float3)(src[i], src[i + 1], src[i + 2]);
+}
+
+// geo: content x0 y0 w h | photo x0 y0 w h (floats) ; col: bg rgb, text rgb, edge rgb, edge width
+__kernel void frame(__global const float* src, __global float* dst, int W, int H,
+                    int cx0, int cy0, int cw, int ch, float px0, float py0, float pw, float ph,
+                    __global const float* col, __global const uchar* mask, int tw, int th, int tx, int ttop)
+{
+    int x = get_global_id(0), y = get_global_id(1);
+    if (x >= W || y >= H) return;
+    float3 bg = (float3)(col[0], col[1], col[2]);
+    float3 tc = (float3)(col[3], col[4], col[5]);
+    float3 ec = (float3)(col[6], col[7], col[8]);
+    float ew = col[9];
+    float u = x + 0.5f, v = y + 0.5f;
+    float3 o = bg;
+    if (u >= px0 && u < px0 + pw && v >= py0 && v < py0 + ph) {
+        float sx = cx0 + (u - px0) / pw * cw - 0.5f, sy = cy0 + (v - py0) / ph * ch - 0.5f;
+        int ix = (int)floor(sx), iy = (int)floor(sy);
+        float fx = sx - ix, fy = sy - iy;
+        float3 r[4];
+        for (int j = 0; j < 4; j++) {
+            int yy = clamp(iy - 1 + j, cy0, cy0 + ch - 1);
+            float3 p0 = fetch(src, W, clamp(ix - 1, cx0, cx0 + cw - 1), yy);
+            float3 p1 = fetch(src, W, clamp(ix, cx0, cx0 + cw - 1), yy);
+            float3 p2 = fetch(src, W, clamp(ix + 1, cx0, cx0 + cw - 1), yy);
+            float3 p3 = fetch(src, W, clamp(ix + 2, cx0, cx0 + cw - 1), yy);
+            r[j] = (float3)(cr(fx, p0.x, p1.x, p2.x, p3.x), cr(fx, p0.y, p1.y, p2.y, p3.y), cr(fx, p0.z, p1.z, p2.z, p3.z));
+        }
+        o = (float3)(cr(fy, r[0].x, r[1].x, r[2].x, r[3].x), cr(fy, r[0].y, r[1].y, r[2].y, r[3].y),
+                     cr(fy, r[0].z, r[1].z, r[2].z, r[3].z));
+    } else if (ew > 0.0f && u >= px0 - ew && u < px0 + pw + ew && v >= py0 - ew && v < py0 + ph + ew) {
+        o = ec;
+    } else if (tw > 0) {
+        int mx = x - tx, my = ttop - y;
+        if (mx >= 0 && mx < tw && my >= 0 && my < th) {
+            float a = mask[my * tw + mx] / 255.0f;
+            o = bg + (tc - bg) * a;
+        }
+    }
+    int i = (y * W + x) * 4;
+    dst[i] = o.x; dst[i + 1] = o.y; dst[i + 2] = o.z; dst[i + 3] = 1.0f;
+}
+)CL";
+
 struct Compiled {
     cl_kernel kernel = nullptr;
     cl_kernel hist = nullptr;
     cl_kernel colorHist = nullptr;
-    std::string error;
+    cl_kernel colMax = nullptr, rowMax = nullptr, frame = nullptr;
+    std::string error, frameError;
 };
 
 std::mutex g_Mutex; // kernels are shared, and clSetKernelArg is not thread safe
@@ -261,6 +342,19 @@ Compiled& kernelFor(const Api& a, cl_context ctx, cl_device_id dev)
     if (e2 != CL_SUCCESS) c.hist = nullptr;
     c.colorHist = a.CreateKernel(prog, "colorHist", &e2);
     if (e2 != CL_SUCCESS) c.colorHist = nullptr;
+
+    cl_program fp = a.CreateProgramWithSource(ctx, 1, &kFrameSource, nullptr, &e2);
+    if (e2 == CL_SUCCESS) e2 = a.BuildProgram(fp, 1, &dev, "", nullptr, nullptr);
+    if (e2 != CL_SUCCESS) {
+        char log[2048] = {};
+        if (fp) a.GetProgramBuildInfo(fp, dev, CL_PROGRAM_BUILD_LOG, sizeof(log) - 1, log, nullptr);
+        c.frameError = std::string("OpenCL frame build failed: ") + log;
+        return c;
+    }
+    c.colMax = a.CreateKernel(fp, "colMax", &e2);
+    c.rowMax = a.CreateKernel(fp, "rowMax", &e2);
+    c.frame = a.CreateKernel(fp, "frame", &e2);
+    if (!c.colMax || !c.rowMax || !c.frame) c.frameError = "clCreateKernel (frame) failed";
     return c;
 }
 
@@ -417,6 +511,112 @@ bool clColorHistogram(void* queue, void* src, int width, int height, int step, i
     if (e == CL_SUCCESS) e = a.EnqueueReadBuffer(q, h, 1, 0, out.size() * sizeof(uint32_t), out.data(), 0, nullptr, nullptr);
     a.ReleaseMemObject(h);
     if (e != CL_SUCCESS) return fail("OpenCL color histogram failed");
+    return true;
+}
+
+bool clContentMax(void* queue, void* src, int width, int height, std::vector<float>& colMax,
+                  std::vector<float>& rowMax, const char** err)
+{
+    static std::string s_Err;
+    auto fail = [&](const std::string& m) {
+        s_Err = m;
+        if (err) *err = s_Err.c_str();
+        return false;
+    };
+    const Api& a = api();
+    if (!a.ok) return fail("OpenCL runtime not found");
+    cl_command_queue q = static_cast<cl_command_queue>(queue);
+    cl_context ctx = nullptr;
+    cl_device_id dev = nullptr;
+    if (a.GetCommandQueueInfo(q, CL_QUEUE_CONTEXT, sizeof(ctx), &ctx, nullptr) != CL_SUCCESS ||
+        a.GetCommandQueueInfo(q, CL_QUEUE_DEVICE, sizeof(dev), &dev, nullptr) != CL_SUCCESS) {
+        return fail("clGetCommandQueueInfo failed");
+    }
+    std::lock_guard<std::mutex> lock(g_Mutex);
+    Compiled& k = kernelFor(a, ctx, dev);
+    if (!k.colMax) return fail(k.frameError.empty() ? k.error : k.frameError);
+
+    colMax.assign(size_t(width), 0.0f);
+    rowMax.assign(size_t(height), 0.0f);
+    cl_int e = 0;
+    cl_mem cb = a.CreateBuffer(ctx, CL_MEM_READ_WRITE, colMax.size() * sizeof(float), nullptr, &e);
+    cl_mem rb = a.CreateBuffer(ctx, CL_MEM_READ_WRITE, rowMax.size() * sizeof(float), nullptr, &e);
+    cl_mem s = static_cast<cl_mem>(src);
+    struct Job {
+        cl_kernel k;
+        cl_mem out;
+        size_t n;
+    } jobs[2] = {{k.colMax, cb, size_t(width)}, {k.rowMax, rb, size_t(height)}};
+    for (Job& j : jobs) {
+        cl_uint i = 0;
+        e |= a.SetKernelArg(j.k, i++, sizeof(cl_mem), &s);
+        e |= a.SetKernelArg(j.k, i++, sizeof(int), &width);
+        e |= a.SetKernelArg(j.k, i++, sizeof(int), &height);
+        e |= a.SetKernelArg(j.k, i++, sizeof(cl_mem), &j.out);
+        const size_t global = (j.n + 63) / 64 * 64, local = 64;
+        if (e == CL_SUCCESS) e = a.EnqueueNDRangeKernel(q, j.k, 1, nullptr, &global, &local, 0, nullptr, nullptr);
+    }
+    if (e == CL_SUCCESS) e = a.EnqueueReadBuffer(q, cb, 1, 0, colMax.size() * sizeof(float), colMax.data(), 0, nullptr, nullptr);
+    if (e == CL_SUCCESS) e = a.EnqueueReadBuffer(q, rb, 1, 0, rowMax.size() * sizeof(float), rowMax.data(), 0, nullptr, nullptr);
+    if (cb) a.ReleaseMemObject(cb);
+    if (rb) a.ReleaseMemObject(rb);
+    if (e != CL_SUCCESS) return fail("OpenCL content scan failed");
+    return true;
+}
+
+bool clFrame(void* queue, void* src, void* dst, int width, int height, const ClFrameArgs& f, const char** err)
+{
+    static std::string s_Err;
+    auto fail = [&](const std::string& m) {
+        s_Err = m;
+        if (err) *err = s_Err.c_str();
+        return false;
+    };
+    const Api& a = api();
+    if (!a.ok) return fail("OpenCL runtime not found");
+    cl_command_queue q = static_cast<cl_command_queue>(queue);
+    cl_context ctx = nullptr;
+    cl_device_id dev = nullptr;
+    if (a.GetCommandQueueInfo(q, CL_QUEUE_CONTEXT, sizeof(ctx), &ctx, nullptr) != CL_SUCCESS ||
+        a.GetCommandQueueInfo(q, CL_QUEUE_DEVICE, sizeof(dev), &dev, nullptr) != CL_SUCCESS) {
+        return fail("clGetCommandQueueInfo failed");
+    }
+    std::lock_guard<std::mutex> lock(g_Mutex);
+    Compiled& k = kernelFor(a, ctx, dev);
+    if (!k.frame) return fail(k.frameError.empty() ? k.error : k.frameError);
+
+    cl_int e = 0;
+    float colors[10];
+    std::memcpy(colors, f.colors, sizeof(colors));
+    cl_mem colBuf = a.CreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(colors), colors, &e);
+    unsigned char dummy = 0;
+    const bool hasMask = f.mask && f.tw > 0 && f.th > 0;
+    cl_mem maskBuf = a.CreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                    hasMask ? size_t(f.tw) * f.th : 1, hasMask ? (void*)f.mask : &dummy, &e);
+    if (!colBuf || !maskBuf) {
+        if (colBuf) a.ReleaseMemObject(colBuf);
+        if (maskBuf) a.ReleaseMemObject(maskBuf);
+        return fail("clCreateBuffer failed");
+    }
+    int tw = hasMask ? f.tw : 0, th = hasMask ? f.th : 0;
+    cl_mem s = static_cast<cl_mem>(src), d = static_cast<cl_mem>(dst);
+    cl_uint i = 0;
+    e = CL_SUCCESS;
+    e |= a.SetKernelArg(k.frame, i++, sizeof(cl_mem), &s);
+    e |= a.SetKernelArg(k.frame, i++, sizeof(cl_mem), &d);
+    e |= a.SetKernelArg(k.frame, i++, sizeof(int), &width);
+    e |= a.SetKernelArg(k.frame, i++, sizeof(int), &height);
+    for (int v : {f.cx0, f.cy0, f.cw, f.ch}) e |= a.SetKernelArg(k.frame, i++, sizeof(int), &v);
+    for (float v : {f.px0, f.py0, f.pw, f.ph}) e |= a.SetKernelArg(k.frame, i++, sizeof(float), &v);
+    e |= a.SetKernelArg(k.frame, i++, sizeof(cl_mem), &colBuf);
+    e |= a.SetKernelArg(k.frame, i++, sizeof(cl_mem), &maskBuf);
+    for (int v : {tw, th, f.tx, f.ttop}) e |= a.SetKernelArg(k.frame, i++, sizeof(int), &v);
+    const size_t local[2] = {16, 16};
+    const size_t global[2] = {(size_t(width) + 15) / 16 * 16, (size_t(height) + 15) / 16 * 16};
+    if (e == CL_SUCCESS) e = a.EnqueueNDRangeKernel(q, k.frame, 2, nullptr, global, local, 0, nullptr, nullptr);
+    a.ReleaseMemObject(colBuf);
+    a.ReleaseMemObject(maskBuf);
+    if (e != CL_SUCCESS) return fail("OpenCL frame render failed");
     return true;
 }
 

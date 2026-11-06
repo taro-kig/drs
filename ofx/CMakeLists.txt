@@ -17,6 +17,15 @@ FetchContent_Declare(openfx
 FetchContent_MakeAvailable(openfx)
 set(OFX ${openfx_SOURCE_DIR})
 
+# stb_truetype (public domain) for Photo Frame captions, pinned by commit and hash
+FetchContent_Declare(stb_truetype
+  URL https://raw.githubusercontent.com/nothings/stb/d14d46f6b44456eb88beac58cba833a4135d4c89/stb_truetype.h
+  URL_HASH SHA256=ECD30B05E0DD4FEA3A13C26810DD9E1992DC379049482C393D5A19E6B5090AAB
+  DOWNLOAD_NO_EXTRACT TRUE
+)
+FetchContent_MakeAvailable(stb_truetype)
+set(STB_DIR ${stb_truetype_SOURCE_DIR})
+
 add_library(ofxsupport STATIC
   ${OFX}/Support/Library/ofxsCore.cpp
   ${OFX}/Support/Library/ofxsImageEffect.cpp
@@ -67,6 +76,8 @@ drs_ofx_plugin(LookExplorer LookExplorer/LookExplorer.cpp)
 drs_ofx_plugin(ColorLook ColorLook/ColorLook.cpp)
 target_include_directories(ColorLook PRIVATE LookExplorer)
 drs_ofx_plugin(HueVectors HueVectors/HueVectors.cpp)
+drs_ofx_plugin(PhotoFrame PhotoFrame/PhotoFrame.cpp PhotoFrame/TextRaster.cpp)
+target_include_directories(PhotoFrame PRIVATE PhotoFrame ${STB_DIR})
 target_include_directories(HueVectors PRIVATE HueVectors)
 
 # pixel math tests (no OFX host needed)
@@ -88,7 +99,7 @@ add_test(NAME lut COMMAND test_lut)
 
 # runs the OpenCL kernel on this machine's GPU (skips without OpenCL)
 add_executable(test_cl tests/test_cl.cpp common/ClLut.cpp)
-target_include_directories(test_cl PRIVATE common ColorAnchors LookExplorer ColorLook)
+target_include_directories(test_cl PRIVATE common ColorAnchors LookExplorer ColorLook PhotoFrame)
 target_link_libraries(test_cl PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME opencl COMMAND test_cl)
 
@@ -107,3 +118,7 @@ add_test(NAME hero COMMAND test_hero)
 add_executable(test_huevec tests/test_huevec.cpp)
 target_include_directories(test_huevec PRIVATE common ColorAnchors HueVectors)
 add_test(NAME huevec COMMAND test_huevec)
+
+add_executable(test_frame tests/test_frame.cpp PhotoFrame/TextRaster.cpp)
+target_include_directories(test_frame PRIVATE common ColorAnchors PhotoFrame ${STB_DIR})
+add_test(NAME frame COMMAND test_frame)
