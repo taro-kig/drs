@@ -157,6 +157,13 @@ int main(int argc, char** argv)
     check(fillCaption("{exposure}", "1/200 s", "", "ISO 64", "", "", "", "") == "1/200 s \xC2\xB7 ISO 64",
           "missing fields are skipped without stray dots");
     check(fillCaption("{camera} | {lens}", "", "", "", "", "A", "B", "") == "A | B", "custom template");
+    const std::string dot = " \xC2\xB7 ";
+    check(fillCaption("{camera}" + dot + "{lens}", "", "", "", "", "", "", "").empty() &&
+              fillCaption("{camera}" + dot + "{lens}", "", "", "", "", "SONY", "", "") == "SONY" &&
+              fillCaption("{camera}" + dot + "{lens}", "", "", "", "", "", "35mm", "") == "35mm" &&
+              fillCaption("{camera}" + dot + "{lens}" + dot + "{date}", "", "", "", "", "A", "", "D") ==
+                  "A" + dot + "D",
+          "empty camera / lens leave no stray separators");
 
     // layout: 2:3 photo on a 2:3 canvas, defaults
     FrameLayout L = computeLayout(1333, 2000, 1333, 2000, 0.85f, 0.17f, kAlignLeft, 200, 40);
@@ -205,6 +212,12 @@ int main(int argc, char** argv)
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) dark = dark || framePixel(at, x, y, d).x < 0.3f;
     check(dark, "caption pixels are drawn");
+    TextMask jl = rasterizeText("left", font, 20, &err), jr = rasterizeText("right", font, 20, &err);
+    TextMask j = joinCaptions(jl, jr, 400, 30);
+    bool rightEdge = false;
+    for (int y = 0; y < j.h; ++y) rightEdge = rightEdge || j.alpha[size_t(y) * j.w + j.w - 3] > 100;
+    check(j.w == 400 && rightEdge && joinCaptions(jl, jr, 50, 30).w == jl.w + 30 + jr.w,
+          "two captions: right one ends at the photo's right edge, never overlapping");
 
     // DI colors: paper is bright but not white, black is near black, order kept
     V3 pw = frameOutputColor(frameDisplayColor(kFrameWhite, {}), kSpaceDI, 0);
@@ -230,7 +243,12 @@ int main(int argc, char** argv)
                 p[3] = 1;
             }
         auto pat = [&](int x, int y) { return &photo[(size_t(y) * CW + x) * 4]; };
-        TextMask pm = rasterizeText("1/200 s \xC2\xB7 F8.0 \xC2\xB7 ISO 64 \xC2\xB7 35mm", font, 0.012f * CW, &err);
+        // two-sided caption, as the plugin draws it by default
+        float tpx = 0.012f * CW * 2.0f; // larger than default so it reads in a 400 px preview
+        float pw = computeLayout(CW, CH, CW, CH, 0.85f, 0.17f, kAlignLeft, 0, 0).photo.w;
+        TextMask pm = joinCaptions(rasterizeText("1/200 s \xC2\xB7 F8.0 \xC2\xB7 ISO 64", font, tpx, &err),
+                                   rasterizeText("SONY ILCE-7RM5 \xC2\xB7 35mm", font, tpx, &err), int(pw),
+                                   int(tpx * 2));
         for (int k = 0; k < 3; ++k) {
             FrameDraw f;
             f.layout = computeLayout(CW, CH, CW, CH, 0.85f, 0.17f, kAlignLeft, pm.w, 0.03f * CW);

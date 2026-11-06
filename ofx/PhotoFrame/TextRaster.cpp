@@ -149,4 +149,20 @@ TextMask rasterizeText(const std::string& utf8, const std::string& fontPath, flo
     return m;
 }
 
+TextMask joinCaptions(const TextMask& left, const TextMask& right, int width, int gap)
+{
+    if (right.w == 0) return left;
+    TextMask m;
+    m.w = std::max(width, left.w + (left.w > 0 ? gap : 0) + right.w);
+    m.h = std::max(left.h, right.h);
+    m.alpha.assign(size_t(m.w) * m.h, 0);
+    auto blit = [&](const TextMask& s, int x0) {
+        for (int y = 0; y < s.h; ++y)
+            for (int x = 0; x < s.w; ++x) m.alpha[size_t(y) * m.w + x0 + x] = s.alpha[size_t(y) * s.w + x];
+    };
+    blit(left, 0);
+    blit(right, m.w - right.w);
+    return m;
+}
+
 } // namespace drs

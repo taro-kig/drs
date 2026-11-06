@@ -238,6 +238,26 @@ inline std::string fillCaption(const std::string& tmpl, const std::string& shutt
         size_t p;
         while ((p = s.find(t.key)) != std::string::npos) s.replace(p, std::strlen(t.key), t.val);
     }
+    // tidy up after empty fields: no doubled, leading or trailing separators (" · ", " | ", " / ")
+    const char* const seps[] = {" \xC2\xB7 ", " | ", " / "};
+    auto trim = [](std::string& x) {
+        size_t a = x.find_first_not_of(' '), b = x.find_last_not_of(' ');
+        x = a == std::string::npos ? "" : x.substr(a, b - a + 1);
+    };
+    for (int pass = 0; pass < 4; ++pass) {
+        for (const char* sep : seps) {
+            std::string sp(sep), core = sp.substr(1, sp.size() - 2); // "·", "|", "/"
+            size_t p;
+            while ((p = s.find(sp + core + " ")) != std::string::npos) s.erase(p, core.size() + 1); // "a ·  · b"
+            while ((p = s.find(sp + " " + core + " ")) != std::string::npos) s.erase(p, core.size() + 2);
+            trim(s);
+            if (s.compare(0, core.size(), core) == 0) s.erase(0, core.size());
+            trim(s);
+            if (s.size() >= core.size() && s.compare(s.size() - core.size(), core.size(), core) == 0)
+                s.erase(s.size() - core.size());
+            trim(s);
+        }
+    }
     return s;
 }
 

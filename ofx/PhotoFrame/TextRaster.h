@@ -19,4 +19,8 @@ std::string defaultFontPath();
 // when the font cannot be read. Missing glyphs are drawn as the font's box glyph.
 TextMask rasterizeText(const std::string& utf8, const std::string& fontPath, float pixelHeight, std::string* err);
 
+// Left and right captions in one mask `width` wide (wider if they would touch: then the
+// right one starts `gap` px after the left one).
+TextMask joinCaptions(const TextMask& left, const TextMask& right, int width, int gap);
+
 } // namespace drs

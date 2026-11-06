@@ -82,6 +82,7 @@ public:
         m_File = fetchStringParam("photoFile");
         m_ShowCaption = fetchBooleanParam("showCaption");
         m_Template = fetchStringParam("template");
+        m_TemplateRight = fetchStringParam("templateRight");
         for (int i = 0; i < 7; ++i) m_Fields[i] = fetchStringParam(kFieldNames[i]);
         m_TextSize = fetchDoubleParam("textSize");
         m_TextGap = fetchDoubleParam("textGap");
@@ -152,18 +153,19 @@ public:
             drs::contentRect(colMax, rowMax, cx0, cy0, cw, ch);
         }
 
-        // 2. caption bitmap
+        // 2. caption text
         const float shortSide = float(std::min(W, H));
-        std::shared_ptr<const drs::TextMask> mask;
-        if (m_ShowCaption->getValueAtTime(t)) {
-            std::string tmpl, f[7], font;
+        const bool showCaption = m_ShowCaption->getValueAtTime(t);
+        std::string leftText, rightText, font;
+        if (showCaption) {
+            std::string tmpl, tmplR, f[7];
             m_Template->getValueAtTime(t, tmpl);
+            m_TemplateRight->getValueAtTime(t, tmplR);
             for (int i = 0; i < 7; ++i) m_Fields[i]->getValueAtTime(t, f[i]);
             m_Font->getValueAtTime(t, font);
             if (font.empty()) font = drs::defaultFontPath();
-            std::string text = drs::fillCaption(tmpl, f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
-            float px = float(m_TextSize->getValueAtTime(t)) * 0.01f * shortSide;
-            mask = captionMask(text, font, px);
+            leftText = drs::fillCaption(tmpl, f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
+            rightText = drs::fillCaption(tmplR, f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
         }
 
         // 3. layout and colors
@@ -171,6 +173,18 @@ public:
         m_Space->getValueAtTime(t, space);
         m_Color->getValueAtTime(t, colorMode);
         m_Align->getValueAtTime(t, align);
+        // with a right-hand caption the two share one bitmap as wide as the photo
+        const bool twoSided = showCaption && !rightText.empty();
+        if (twoSided) align = drs::kAlignLeft;
+        // the photo's width does not depend on the caption, so measure it first
+        const float photoW = drs::computeLayout(W, H, float(cw), float(ch), float(m_Size->getValueAtTime(t)),
+                                                float(m_Pos->getValueAtTime(t)), 0, 0, 0)
+                                 .photo.w;
+        std::shared_ptr<const drs::TextMask> mask;
+        if (showCaption) {
+            float px = float(m_TextSize->getValueAtTime(t)) * 0.01f * shortSide;
+            mask = captionMask(leftText, rightText, int(std::lround(photoW)), font, px);
+        }
         m_TextColorMode->getValueAtTime(t, textMode);
         double r, g, bl;
         m_Custom->getValueAtTime(t, r, g, bl);
@@ -223,21 +237,28 @@ private:
         throw std::runtime_error("unreachable");
     }
 
-    // the caption only changes with its text, font or size
-    std::shared_ptr<const drs::TextMask> captionMask(const std::string& text, const std::string& font, float px)
+    // The caption only changes with its texts, font, size or the photo's width.
+    // With a right-hand text, both go into one bitmap as wide as the photo.
+    std::shared_ptr<const drs::TextMask> captionMask(const std::string& left, const std::string& right, int width,
+                                                     const std::string& font, float px)
     {
         std::lock_guard<std::mutex> lock(m_MaskMutex);
-        if (m_Mask && text == m_MaskText && font == m_MaskFont && px == m_MaskPx) return m_Mask;
+        if (m_Mask && left == m_MaskLeft && right == m_MaskRight && width == m_MaskWidth && font == m_MaskFont &&
+            px == m_MaskPx)
+            return m_Mask;
         std::string err;
-        auto m = std::make_shared<drs::TextMask>(drs::rasterizeText(text, font, px, &err));
+        drs::TextMask l = drs::rasterizeText(left, font, px, &err);
+        drs::TextMask r = right.empty() ? drs::TextMask{} : drs::rasterizeText(right, font, px, &err);
+        auto m = std::make_shared<drs::TextMask>(drs::joinCaptions(l, r, width, int(std::lround(px * 2.0f))));
         if (!err.empty()) sendMessage(Message::eMessageWarning, "", "Photo Frame: " + err);
-        m_Mask = m, m_MaskText = text, m_MaskFont = font, m_MaskPx = px;
+        m_Mask = m, m_MaskLeft = left, m_MaskRight = right, m_MaskWidth = width, m_MaskFont = font, m_MaskPx = px;
         return m_Mask;
     }
 
     std::mutex m_MaskMutex;
     std::shared_ptr<const drs::TextMask> m_Mask;
-    std::string m_MaskText, m_MaskFont;
+    std::string m_MaskLeft, m_MaskRight, m_MaskFont;
+    int m_MaskWidth = 0;
     float m_MaskPx = 0;
 
     Clip* m_Dst;
@@ -253,6 +274,7 @@ private:
     StringParam* m_File;
     BooleanParam* m_ShowCaption;
     StringParam* m_Template;
+    StringParam* m_TemplateRight;
     StringParam* m_Fields[7];
     DoubleParam* m_TextSize;
     DoubleParam* m_TextGap;
@@ -398,10 +420,13 @@ void PhotoFrameFactory::describeInContext(ImageEffectDescriptor& desc, ContextEn
     read->setHint("Re-read the EXIF of Photo File (overwrites the fields below).");
     read->setParent(*cap);
     page->addChild(*read);
-    text(desc, page, cap, "template", "Caption",
-         "Text of the caption. Fields: {exposure} = shutter · aperture · ISO · focal, or {shutter} {aperture} {iso} "
-         "{focal} {camera} {lens} {date}.",
+    text(desc, page, cap, "template", "Caption Left",
+         "Caption under the photo's left edge. Fields: {exposure} = shutter · aperture · ISO · focal, or {shutter} "
+         "{aperture} {iso} {focal} {camera} {lens} {date}.",
          "{exposure}");
+    text(desc, page, cap, "templateRight", "Caption Right",
+         "Caption under the photo's right edge (same fields). Empty = one caption, placed by Align.",
+         "{camera} \xC2\xB7 {lens}");
     for (int i = 0; i < 7; ++i)
         text(desc, page, cap, kFieldNames[i], kFieldLabels[i], "From EXIF; edit freely.", "");
 
