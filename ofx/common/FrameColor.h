@@ -275,9 +275,9 @@ inline V3 matchPixel(V3 di, const MatchSettings& m)
             // never push a channel further below zero than it already is (extreme colors near
             // the edge of DWG): use the largest scale toward chromaScale that stays in range,
             // found by bisection so neighbouring colors get neighbouring results
-            const float floor = std::min({l.x, l.y, l.z, 0.0f}) - 1.0e-4f;
+            const float lowest = std::min({l.x, l.y, l.z, 0.0f}) - 1.0e-4f;
             auto at = [&](float k) { return labToLin({lab.x, lab.y * k, lab.z * k}); };
-            auto ok = [&](V3 o) { return std::min({o.x, o.y, o.z}) >= floor; };
+            auto ok = [&](V3 o) { return std::min({o.x, o.y, o.z}) >= lowest; };
             V3 o = at(kc);
             if (!ok(o)) {
                 float lo = 1.0f, hi = kc; // scale 1 = input, always in range
