@@ -18,6 +18,7 @@
 #define CLC
 #endif
 
+#include "CheckMath.h"
 #include "ClLut.h"
 #include "FrameMath.h"
 #include "ColorLookMath.h"
@@ -239,6 +240,56 @@ int main()
     check(ok && finite, "3x3 contact sheet runs, output finite");
     // the pixel in the corner of the image is the dark frame
     check(std::fabs(out[0] - 0.04f) < 1e-6f, "frame color at the image corner");
+
+    // Check View: GPU kernel vs checkPixel() on the CPU, all four views
+    for (int mode = 0; mode < 4; ++mode) {
+        CheckSettings cs = makeCheck(mode);
+        std::vector<float> tab(cs.zone, cs.zone + kZones * 3);
+        tab.insert(tab.end(), kZoneLo, kZoneLo + kZones);
+        tab.insert(tab.end(), kZoneHi, kZoneHi + kZones);
+        tab.insert(tab.end(), cs.gamut, cs.gamut + 9);
+        bool cok = clCheckView(q, src, dst, W, Hh, mode, tab, &err);
+        Finish(q);
+        ReadBuffer(q, dst, 1, 0, bytes, out.data(), 0, nullptr, nullptr);
+        float worst = 0;
+        int mism = 0, n = 0;
+        for (size_t i = 0; i < img.size(); i += 4 * 101, ++n) {
+            V3 c = checkPixel({img[i], img[i + 1], img[i + 2]}, cs);
+            float e2 = std::fmax(std::fabs(c.x - out[i]), std::fmax(std::fabs(c.y - out[i + 1]), std::fabs(c.z - out[i + 2])));
+            worst = std::fmax(worst, e2);
+            mism += e2 > 0.01f; // a pixel right on a zone edge may land on the other side
+        }
+        std::printf("       Check View mode %d: %d of %d samples differ (max %.4f)\n", mode, mism, n, worst);
+        if (!cok) std::printf("       error: %s\n", err ? err : "?");
+        check(cok && mism <= n / 1000, "Check View GPU matches the CPU");
+    }
+
+    // gather (frame samples for Auto Neutral / Shot Match / Color Keeper / Palette Card)
+    {
+        std::vector<float> smp;
+        bool gok = clGather(q, src, W, Hh, 13, smp, &err);
+        const int gw = (W + 12) / 13;
+        bool same = gok && smp.size() == size_t(gw) * ((Hh + 12) / 13) * 3;
+        for (int gy = 0; same && gy < (Hh + 12) / 13; gy += 37)
+            for (int gx = 0; same && gx < gw; gx += 29) {
+                size_t si = (size_t(gy) * gw + gx) * 3, ii = (size_t(gy) * 13 * W + size_t(gx) * 13) * 4;
+                same = smp[si] == img[ii] && smp[si + 1] == img[ii + 1] && smp[si + 2] == img[ii + 2];
+            }
+        if (!gok) std::printf("       error: %s\n", err ? err : "?");
+        check(same, "gather returns exactly every 13th pixel");
+    }
+
+    // Palette Card drawing: a rectangle filled, the rest untouched
+    {
+        std::vector<float> rects = {100, 50, 300, 150}, cols = {0.1f, 0.2f, 0.3f};
+        bool pok = clPalette(q, src, dst, W, Hh, rects, cols, &err);
+        Finish(q);
+        ReadBuffer(q, dst, 1, 0, bytes, out.data(), 0, nullptr, nullptr);
+        size_t in = (size_t(100) * W + 200) * 4, outside = (size_t(400) * W + 200) * 4;
+        bool good = pok && out[in] == 0.1f && out[in + 1] == 0.2f && out[in + 2] == 0.3f && out[outside] == img[outside];
+        if (!pok) std::printf("       error: %s\n", err ? err : "?");
+        check(good, "Palette Card draws its rectangles, leaves the picture");
+    }
 
     std::printf("%s\n", g_fail ? "SOME CHECKS FAILED" : "all checks passed");
     return g_fail ? 1 : 0;

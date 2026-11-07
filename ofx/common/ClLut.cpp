@@ -306,12 +306,125 @@ __kernel void frame(__global const float* src, __global float* dst, int W, int H
 }
 )CL";
 
+// Check View and Palette Card. Built without fast math, so zone edges match the CPU exactly.
+const char* kUtilSource = R"CL(
+float diToLinU(float t)
+{
+    if (t <= 0.02740668f) return t / 10.44426855f;
+    return exp2(t / 0.07329248f - 7.0f) - 0.0075f;
+}
+
+float linToDiU(float x)
+{
+    if (x <= 0.00262409f) return x * 10.44426855f;
+    return (log2(x + 0.0075f) + 7.0f) * 0.07329248f;
+}
+
+float smooth01(float e0, float e1, float x)
+{
+    float t = clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+float3 linToLab(float3 c)
+{
+    float X = 0.70062239f * c.x + 0.14877482f * c.y + 0.10105872f * c.z;
+    float Y = 0.27411851f * c.x + 0.87363190f * c.y - 0.14775041f * c.z;
+    float Z = -0.09896291f * c.x - 0.13789533f * c.y + 1.32591599f * c.z;
+    float l = cbrt(0.8189330101f * X + 0.3618667424f * Y - 0.1288597137f * Z);
+    float m = cbrt(0.0329845436f * X + 0.9293118715f * Y + 0.0361456387f * Z);
+    float s = cbrt(0.0482003018f * X + 0.2643662691f * Y + 0.6338517070f * Z);
+    return (float3)(0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s,
+                    1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s,
+                    0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s);
+}
+
+float3 greyOf(float Y, float dim)
+{
+    float g = linToDiU(fmax(Y, 0.0f) * dim);
+    return (float3)(g, g, g);
+}
+
+// mirrors checkPixel() in CheckView/CheckMath.h; tab: 8 zone colors (DI, last = gamut alert),
+// zone lo[8], zone hi[8], gamut matrix[9]
+__kernel void checkView(__global const float* src, __global float* dst, int W, int H, int mode,
+                        __global const float* tab)
+{
+    int x = get_global_id(0), y = get_global_id(1);
+    if (x >= W || y >= H) return;
+    int i = (y * W + x) * 4;
+    float3 di = (float3)(src[i], src[i + 1], src[i + 2]);
+    float3 l = (float3)(diToLinU(di.x), diToLinU(di.y), diToLinU(di.z));
+    float Y = 0.27411851f * l.x + 0.87363190f * l.y - 0.14775041f * l.z;
+    __global const float* lo = tab + 24;
+    __global const float* hi = tab + 32;
+    __global const float* g = tab + 40;
+    float3 o;
+    if (mode == 0) {
+        float st = log2(fmax(Y, 1.0e-9f) / 0.18f);
+        o = greyOf(Y, 1.0f);
+        for (int z = 0; z < 7; z++)
+            if (st >= lo[z] && st < hi[z]) {
+                o = (float3)(tab[z * 3], tab[z * 3 + 1], tab[z * 3 + 2]);
+                break;
+            }
+    } else if (mode == 1) {
+        float3 lab = linToLab(l);
+        float C = sqrt(lab.y * lab.y + lab.z * lab.z);
+        float h = atan2(lab.z, lab.y) * 57.29578f;
+        float dh = fabs(h - 55.0f);
+        float w = (1.0f - smooth01(18.0f, 28.0f, dh)) * smooth01(0.02f, 0.035f, C) * (1.0f - smooth01(0.16f, 0.2f, C)) *
+                  smooth01(0.22f, 0.3f, lab.x) * (1.0f - smooth01(0.92f, 0.97f, lab.x));
+        if (isnan(w)) w = 0.0f;
+        float3 gr = greyOf(Y, 0.5f);
+        o = gr + (di - gr) * w;
+    } else {
+        float3 t = (float3)(g[0] * l.x + g[1] * l.y + g[2] * l.z, g[3] * l.x + g[4] * l.y + g[5] * l.z,
+                            g[6] * l.x + g[7] * l.y + g[8] * l.z);
+        float mx = fmax(t.x, fmax(t.y, t.z)), mn = fmin(t.x, fmin(t.y, t.z));
+        if (mx > 1.0e-6f && mn < -0.002f * mx) o = (float3)(tab[21], tab[22], tab[23]);
+        else o = greyOf(Y, 1.0f);
+    }
+    dst[i] = o.x; dst[i + 1] = o.y; dst[i + 2] = o.z; dst[i + 3] = src[i + 3];
+}
+
+// every step-th pixel in x and y, rgb only, row by row (gw = ceil(W / step) per row)
+__kernel void gather(__global const float* src, int W, int H, int step, int gw, __global float* out)
+{
+    int gx = get_global_id(0), gy = get_global_id(1);
+    int x = gx * step, y = gy * step;
+    if (x >= W || y >= H) return;
+    int i = (y * W + x) * 4, o = (gy * gw + gx) * 3;
+    out[o] = src[i]; out[o + 1] = src[i + 1]; out[o + 2] = src[i + 2];
+}
+
+// Palette Card: the picture with up to 16 filled rectangles on top (later ones win).
+// rects: x0 y0 x1 y1 (pixel rows as stored), cols: rgb (DI)
+__kernel void paletteDraw(__global const float* src, __global float* dst, int W, int H, int n,
+                          __global const float* rects, __global const float* cols)
+{
+    int x = get_global_id(0), y = get_global_id(1);
+    if (x >= W || y >= H) return;
+    int i = (y * W + x) * 4;
+    float3 o = (float3)(src[i], src[i + 1], src[i + 2]);
+    float a = src[i + 3];
+    float u = x + 0.5f, v = y + 0.5f;
+    for (int r = 0; r < n; r++)
+        if (u >= rects[r * 4] && u < rects[r * 4 + 2] && v >= rects[r * 4 + 1] && v < rects[r * 4 + 3]) {
+            o = (float3)(cols[r * 3], cols[r * 3 + 1], cols[r * 3 + 2]);
+            a = 1.0f;
+        }
+    dst[i] = o.x; dst[i + 1] = o.y; dst[i + 2] = o.z; dst[i + 3] = a;
+}
+)CL";
+
 struct Compiled {
     cl_kernel kernel = nullptr;
     cl_kernel hist = nullptr;
     cl_kernel colorHist = nullptr;
     cl_kernel colMax = nullptr, rowMax = nullptr, frame = nullptr;
-    std::string error, frameError;
+    cl_kernel check = nullptr, palette = nullptr, gather = nullptr;
+    std::string error, frameError, utilError;
 };
 
 std::mutex g_Mutex; // kernels are shared, and clSetKernelArg is not thread safe
@@ -342,6 +455,19 @@ Compiled& kernelFor(const Api& a, cl_context ctx, cl_device_id dev)
     if (e2 != CL_SUCCESS) c.hist = nullptr;
     c.colorHist = a.CreateKernel(prog, "colorHist", &e2);
     if (e2 != CL_SUCCESS) c.colorHist = nullptr;
+
+    cl_program up = a.CreateProgramWithSource(ctx, 1, &kUtilSource, nullptr, &e2);
+    if (e2 == CL_SUCCESS) e2 = a.BuildProgram(up, 1, &dev, "", nullptr, nullptr);
+    if (e2 != CL_SUCCESS) {
+        char log[2048] = {};
+        if (up) a.GetProgramBuildInfo(up, dev, CL_PROGRAM_BUILD_LOG, sizeof(log) - 1, log, nullptr);
+        c.utilError = std::string("OpenCL utility build failed: ") + log;
+    } else {
+        c.check = a.CreateKernel(up, "checkView", &e2);
+        c.palette = a.CreateKernel(up, "paletteDraw", &e2);
+        c.gather = a.CreateKernel(up, "gather", &e2);
+        if (!c.check || !c.palette || !c.gather) c.utilError = "clCreateKernel (check / palette / gather) failed";
+    }
 
     cl_program fp = a.CreateProgramWithSource(ctx, 1, &kFrameSource, nullptr, &e2);
     if (e2 == CL_SUCCESS) e2 = a.BuildProgram(fp, 1, &dev, "", nullptr, nullptr);
@@ -617,6 +743,152 @@ bool clFrame(void* queue, void* src, void* dst, int width, int height, const ClF
     a.ReleaseMemObject(colBuf);
     a.ReleaseMemObject(maskBuf);
     if (e != CL_SUCCESS) return fail("OpenCL frame render failed");
+    return true;
+}
+
+namespace {
+
+// queue -> context, device and compiled kernels; nullptr (and err set) on failure
+Compiled* utilKernels(const Api& a, void* queue, cl_context& ctx, cl_command_queue& q, std::string& err)
+{
+    if (!a.ok) {
+        err = "OpenCL runtime not found";
+        return nullptr;
+    }
+    q = static_cast<cl_command_queue>(queue);
+    cl_device_id dev = nullptr;
+    if (a.GetCommandQueueInfo(q, CL_QUEUE_CONTEXT, sizeof(ctx), &ctx, nullptr) != CL_SUCCESS ||
+        a.GetCommandQueueInfo(q, CL_QUEUE_DEVICE, sizeof(dev), &dev, nullptr) != CL_SUCCESS) {
+        err = "clGetCommandQueueInfo failed";
+        return nullptr;
+    }
+    Compiled& k = kernelFor(a, ctx, dev);
+    if (!k.check || !k.palette || !k.gather) {
+        err = k.utilError.empty() ? k.error : k.utilError;
+        return nullptr;
+    }
+    return &k;
+}
+
+} // namespace
+
+bool clCheckView(void* queue, void* src, void* dst, int width, int height, int mode, const std::vector<float>& table,
+                 const char** err)
+{
+    static std::string s_Err;
+    auto fail = [&](const std::string& m) {
+        s_Err = m;
+        if (err) *err = s_Err.c_str();
+        return false;
+    };
+    const Api& a = api();
+    std::lock_guard<std::mutex> lock(g_Mutex);
+    cl_context ctx = nullptr;
+    cl_command_queue q = nullptr;
+    std::string why;
+    Compiled* k = utilKernels(a, queue, ctx, q, why);
+    if (!k) return fail(why);
+    cl_int e = 0;
+    cl_mem tab = a.CreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, table.size() * sizeof(float),
+                                (void*)table.data(), &e);
+    if (e != CL_SUCCESS) return fail("clCreateBuffer failed");
+    cl_mem s = static_cast<cl_mem>(src), d = static_cast<cl_mem>(dst);
+    cl_uint i = 0;
+    e |= a.SetKernelArg(k->check, i++, sizeof(cl_mem), &s);
+    e |= a.SetKernelArg(k->check, i++, sizeof(cl_mem), &d);
+    e |= a.SetKernelArg(k->check, i++, sizeof(int), &width);
+    e |= a.SetKernelArg(k->check, i++, sizeof(int), &height);
+    e |= a.SetKernelArg(k->check, i++, sizeof(int), &mode);
+    e |= a.SetKernelArg(k->check, i++, sizeof(cl_mem), &tab);
+    const size_t local[2] = {16, 16};
+    const size_t global[2] = {(size_t(width) + 15) / 16 * 16, (size_t(height) + 15) / 16 * 16};
+    if (e == CL_SUCCESS) e = a.EnqueueNDRangeKernel(q, k->check, 2, nullptr, global, local, 0, nullptr, nullptr);
+    a.ReleaseMemObject(tab);
+    if (e != CL_SUCCESS) return fail("OpenCL check view failed");
+    return true;
+}
+
+bool clPalette(void* queue, void* src, void* dst, int width, int height, const std::vector<float>& rects,
+               const std::vector<float>& colors, const char** err)
+{
+    static std::string s_Err;
+    auto fail = [&](const std::string& m) {
+        s_Err = m;
+        if (err) *err = s_Err.c_str();
+        return false;
+    };
+    const Api& a = api();
+    std::lock_guard<std::mutex> lock(g_Mutex);
+    cl_context ctx = nullptr;
+    cl_command_queue q = nullptr;
+    std::string why;
+    Compiled* k = utilKernels(a, queue, ctx, q, why);
+    if (!k) return fail(why);
+    int n = int(rects.size() / 4);
+    float dummy[4] = {};
+    cl_int e = 0;
+    cl_mem r = a.CreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, n ? rects.size() * sizeof(float) : sizeof(dummy),
+                              n ? (void*)rects.data() : dummy, &e);
+    cl_mem c = a.CreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, n ? colors.size() * sizeof(float) : sizeof(dummy),
+                              n ? (void*)colors.data() : dummy, &e);
+    if (!r || !c) {
+        if (r) a.ReleaseMemObject(r);
+        if (c) a.ReleaseMemObject(c);
+        return fail("clCreateBuffer failed");
+    }
+    cl_mem s = static_cast<cl_mem>(src), d = static_cast<cl_mem>(dst);
+    cl_uint i = 0;
+    e = CL_SUCCESS;
+    e |= a.SetKernelArg(k->palette, i++, sizeof(cl_mem), &s);
+    e |= a.SetKernelArg(k->palette, i++, sizeof(cl_mem), &d);
+    e |= a.SetKernelArg(k->palette, i++, sizeof(int), &width);
+    e |= a.SetKernelArg(k->palette, i++, sizeof(int), &height);
+    e |= a.SetKernelArg(k->palette, i++, sizeof(int), &n);
+    e |= a.SetKernelArg(k->palette, i++, sizeof(cl_mem), &r);
+    e |= a.SetKernelArg(k->palette, i++, sizeof(cl_mem), &c);
+    const size_t local[2] = {16, 16};
+    const size_t global[2] = {(size_t(width) + 15) / 16 * 16, (size_t(height) + 15) / 16 * 16};
+    if (e == CL_SUCCESS) e = a.EnqueueNDRangeKernel(q, k->palette, 2, nullptr, global, local, 0, nullptr, nullptr);
+    a.ReleaseMemObject(r);
+    a.ReleaseMemObject(c);
+    if (e != CL_SUCCESS) return fail("OpenCL palette draw failed");
+    return true;
+}
+
+bool clGather(void* queue, void* src, int width, int height, int step, std::vector<float>& out, const char** err)
+{
+    static std::string s_Err;
+    auto fail = [&](const std::string& m) {
+        s_Err = m;
+        if (err) *err = s_Err.c_str();
+        return false;
+    };
+    const Api& a = api();
+    std::lock_guard<std::mutex> lock(g_Mutex);
+    cl_context ctx = nullptr;
+    cl_command_queue q = nullptr;
+    std::string why;
+    Compiled* k = utilKernels(a, queue, ctx, q, why);
+    if (!k) return fail(why);
+    const int gw = (width + step - 1) / step, gh = (height + step - 1) / step;
+    out.assign(size_t(gw) * gh * 3, 0.0f);
+    cl_int e = 0;
+    cl_mem o = a.CreateBuffer(ctx, CL_MEM_READ_WRITE, out.size() * sizeof(float), nullptr, &e);
+    if (e != CL_SUCCESS) return fail("clCreateBuffer failed");
+    cl_mem s = static_cast<cl_mem>(src);
+    cl_uint i = 0;
+    e |= a.SetKernelArg(k->gather, i++, sizeof(cl_mem), &s);
+    e |= a.SetKernelArg(k->gather, i++, sizeof(int), &width);
+    e |= a.SetKernelArg(k->gather, i++, sizeof(int), &height);
+    e |= a.SetKernelArg(k->gather, i++, sizeof(int), &step);
+    e |= a.SetKernelArg(k->gather, i++, sizeof(int), &gw);
+    e |= a.SetKernelArg(k->gather, i++, sizeof(cl_mem), &o);
+    const size_t local[2] = {16, 16};
+    const size_t global[2] = {(size_t(gw) + 15) / 16 * 16, (size_t(gh) + 15) / 16 * 16};
+    if (e == CL_SUCCESS) e = a.EnqueueNDRangeKernel(q, k->gather, 2, nullptr, global, local, 0, nullptr, nullptr);
+    if (e == CL_SUCCESS) e = a.EnqueueReadBuffer(q, o, 1, 0, out.size() * sizeof(float), out.data(), 0, nullptr, nullptr);
+    a.ReleaseMemObject(o);
+    if (e != CL_SUCCESS) return fail("OpenCL gather failed");
     return true;
 }
 
