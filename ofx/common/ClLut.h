@@ -47,4 +47,18 @@ struct ClFrameArgs {
 // Photo Frame: draws frame, scaled photo (bicubic), edge line and caption.
 bool clFrame(void* queue, void* src, void* dst, int width, int height, const ClFrameArgs& f, const char** err);
 
+// Check View: table = 8 zone colors (DI, rgb) + zone lo[8] + zone hi[8] + gamut matrix[9]
+// (see CheckView/CheckMath.h); mode 0 false color, 1 skin, 2/3 gamut.
+bool clCheckView(void* queue, void* src, void* dst, int width, int height, int mode, const std::vector<float>& table,
+                 const char** err);
+
+// Palette Card: copies the picture and fills rectangles (x0 y0 x1 y1 in stored pixel rows) with
+// colors (DI rgb), later ones on top.
+bool clPalette(void* queue, void* src, void* dst, int width, int height, const std::vector<float>& rects,
+               const std::vector<float>& colors, const char** err);
+
+// Every step-th pixel in x and y (rgb, row by row, ceil(width / step) per row), read back
+// to the host. Blocks until done.
+bool clGather(void* queue, void* src, int width, int height, int step, std::vector<float>& out, const char** err);
+
 } // namespace drs
